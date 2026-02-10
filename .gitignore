@@ -1,2 +1,5 @@
 .env
 .venv/
+.vscode/
+.testcode/
+output.md
