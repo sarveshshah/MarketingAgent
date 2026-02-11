@@ -1,24 +1,20 @@
+import pandas as pd
+from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
-from typing import Any, Annotated, Literal, Optional
+
 from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
 from langchain_community.tools import DuckDuckGoSearchRun
+
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
-import pandas as pd
-from datetime import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential
-from pathlib import Path
-
 
 load_dotenv()
-
-# Add this validation
-import os
-if not os.getenv("GEMINI_API_KEY"):
-    raise ValueError("GEMINI_API_KEY not found in environment variables")
 
 # LLM configurations
 llm = ChatGoogleGenerativeAI(
@@ -27,6 +23,7 @@ llm = ChatGoogleGenerativeAI(
     verbose=True
     )
 
+# Helper function to load and format prompt templates from the prompts directory
 def load_prompt(prompt_name: str, **kwargs: Any) -> str:
     """
     Load a prompt template from the prompts directory and format it with variables.
@@ -94,6 +91,32 @@ class GraphState(TypedDict):
     risk_assessment: Optional[RiskAssessment]
     formatted_markdown: Optional[str]
     human_approval: Optional[bool]
+
+
+# Initial node: Collect campaign input from user
+def collect_campaign_input(state: GraphState) -> dict:
+    """Collect marketing campaign information from user"""
+    
+    # For easy testing purposes
+    campaign_input = {
+        "campaign_type": "New Phone Launch",
+        "target_industry": "High income earners",
+        "budget": "100000",
+        "timeline": "6 months",
+        "goals": "Maximum engagement"
+    }
+    
+    # print("\n=== Marketing Campaign Input ===\n")
+
+    # campaign_input = {
+    #     "campaign_type": input("Campaign type (e.g., product launch, brand awareness, retention): ").strip(),
+    #     "target_industry": input("Target industry or market segment: ").strip(),
+    #     "budget": input("Budget allocated for campaign: ").strip(),
+    #     "timeline": input("Timeline for campaign (e.g., 3 months, Q1 2026): ").strip(),
+    #     "goals": input("Specific goals or KPIs (comma-separated): ").strip(),
+    # }
+    
+    return {"campaign_input": CampaignInput(**campaign_input)}
 
 # First node: Collect campaign input from user
 def analyze_past_campaigns(state: GraphState) -> dict:
@@ -184,9 +207,9 @@ def conduct_market_research(state: GraphState) -> dict:
     # Load prompt template and format with variables
     market_research_prompt = load_prompt(
         "market_research_prompt",
-        campaign_type=campaign_input.campaign_type,
-        target_industry=campaign_input.target_industry,
-        search_result=search_results_text,
+        campaign_type = campaign_input.campaign_type,
+        target_industry = campaign_input.target_industry,
+        search_results = search_results_text,
     )
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -375,30 +398,6 @@ def assess_risks(state: GraphState) -> dict:
             success_metrics="N/A"
         )}
 
-# Initial node: Collect campaign input from user
-def collect_campaign_input(state: GraphState) -> dict:
-    """Collect marketing campaign information from user"""
-    
-    # For easy testing purposes
-    campaign_input = {
-        "campaign_type": "New Phone Launch",
-        "target_industry": "High income earners",
-        "budget": "100000",
-        "timeline": "6 months",
-        "goals": "Maximum engagement"
-    }
-    
-    # print("\n=== Marketing Campaign Input ===\n")
-
-    # campaign_input = {
-    #     "campaign_type": input("Campaign type (e.g., product launch, brand awareness, retention): ").strip(),
-    #     "target_industry": input("Target industry or market segment: ").strip(),
-    #     "budget": input("Budget allocated for campaign: ").strip(),
-    #     "timeline": input("Timeline for campaign (e.g., 3 months, Q1 2026): ").strip(),
-    #     "goals": input("Specific goals or KPIs (comma-separated): ").strip(),
-    # }
-    
-    return {"campaign_input": CampaignInput(**campaign_input)}
 
 # Helper node to generate a fallback markdown report if the LLM formatting fails at the end
 def generate_fallback_report(state: GraphState) -> str:
@@ -622,15 +621,7 @@ app = builder.compile()
 
 # Prepare initial state with both input and placeholder values for output fields
 initial_state = {
-    "campaign_input": None,
-    "past_campaign_insights": "",
-    "market_trends": "",
-    "strategy": None,
-    "channel_recommendation": None,
-    "budget_allocation": None,
-    "risk_assessment": None,
-    "formatted_markdown": None,
-    "human_approval": False
+    "campaign_input": None
 }
 
 # Run graph with user-provided campaign input
