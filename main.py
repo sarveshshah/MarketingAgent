@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 import pandas as pd
 from datetime import datetime
-from utils.prompt_loader import load_prompt
+from tenacity import retry, stop_after_attempt, wait_exponential
+from pathlib import Path
+
 
 load_dotenv()
 
@@ -24,6 +26,26 @@ llm = ChatGoogleGenerativeAI(
     temperature = 0, 
     verbose=True
     )
+
+def load_prompt(prompt_name: str, **kwargs: Any) -> str:
+    """
+    Load a prompt template from the prompts directory and format it with variables.
+    """
+    # Assuming prompts are in a 'prompts' folder relative to main.py
+    prompts_dir = Path(__file__).parent / "prompts"
+    prompt_file = prompts_dir / f"{prompt_name}.txt"
+    
+    if not prompt_file.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+    
+    with open(prompt_file, 'r', encoding='utf-8') as f:
+        template = f.read()
+    
+    try:
+        return template.format(**kwargs)
+    except KeyError as e:
+        raise ValueError(f"Missing required variable in prompt template: {e}")
+    
 
 # Input structure for the campaign details - this is what the user will provide at the start of the graph
 # This was intentntiionally designed to be structured and not a free text input to ensure the LLM receives clear, consistent information to work with in the subsequent nodes.
@@ -83,9 +105,13 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     """
 
     print("Analyzing past campaign data...")
-
+    
     campaign_input = state["campaign_input"]
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    def _invoke_agent(agent, prompt_input):
+        return agent.invoke(prompt_input)
+    
     try:
         df = pd.read_csv("data/marketing_campaign_dataset.csv")
         agent = create_pandas_dataframe_agent(
@@ -104,7 +130,7 @@ def analyze_past_campaigns(state: GraphState) -> dict:
         )
         
         # The agent expects a dictionary with an 'input' key.
-        agent_response = agent.invoke({"input": data_analysis_prompt})
+        agent_response = _invoke_agent(agent, {"input": data_analysis_prompt})
         # The actual result is in the 'output' key of the response dictionary.
         data_insights = agent_response["output"]
 
@@ -125,6 +151,10 @@ def conduct_market_research(state: GraphState) -> dict:
     print("Conducting robust market research...")
     campaign_input = state["campaign_input"]
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    def _search(query: str) -> str: 
+        return search.invoke(query)
+    
     # 1. Generate multiple, targeted search queries
     queries = [
         f"latest marketing trends for {campaign_input.campaign_type} in {campaign_input.target_industry} industry {datetime.now().year}",
@@ -140,7 +170,7 @@ def conduct_market_research(state: GraphState) -> dict:
     for query in queries:
         try:
             print(f"  - Running query: {query}")
-            results = search.invoke(query)
+            results = _search(query)
             all_results.append(f"--- RESULTS FOR QUERY: {query} ---\n{results}")
         except Exception as e:
             print(f"Warning: Query failed: '{query}'. Error: {e}")
@@ -151,33 +181,20 @@ def conduct_market_research(state: GraphState) -> dict:
     
     search_results_text = "\n\n".join(all_results)
     
-    compilation_prompt = f"""
-    ### Persona: Expert Market Research Analyst
-    You are a professional market research analyst. Your primary skill is synthesizing vast amounts of unstructured text from various sources into a concise, actionable summary of key market trends.
-
-    ### Task & Context
-    You have been given the raw, collected results from multiple search queries related to a marketing campaign for a **"{campaign_input.campaign_type}"** in the **"{campaign_input.target_industry}"** industry. 
-    Your task is to analyze all this information and distill it into the most important trends for a marketing strategist.
-
-    **Raw Search Results Dump:**
-    ```{search_results_text}```
+    # Load prompt template and format with variables
+    market_research_prompt = load_prompt(
+        "market_research_prompt",
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        search_result=search_results_text,
+    )
     
-    ### Instructions
-    1.  **Read and Analyze:** Carefully read through all the provided search results.
-    2.  **Identify Key Trends:** Identify the 3-5 most significant and recurring themes or trends that are relevant to the campaign context. Look for patterns related to consumer behavior, technology, channels, and strategy.
-    3.  **Summarize and Format:** For each identified trend, write a concise summary. Present your final output as a markdown-formatted bulleted list. Each bullet point should clearly state the trend and briefly explain its implication.
-
-    ### Example Output:
-    *   **AI-Driven Personalization:** There is a growing emphasis on using AI to create highly personalized customer experiences across email and web, leading to higher engagement.
-    *   **Dominance of Short-Form Video:** Platforms like TikTok and Instagram Reels are critical for reaching younger demographics, with raw, authentic content outperforming polished ads.
-    *   **Sustainability as a Brand Differentiator:** Consumers in this industry increasingly prefer brands that demonstrate strong ethical and environmental commitments.
-
-    ### Final Rule:
-    Your final output must be **ONLY the markdown bulleted list** summarizing the trends. Do not include any introductory phrases, explanations, or concluding remarks.
-    """
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _invoke_llm(prompt):
+        return llm.invoke(prompt)
     
     try:
-        response = llm.invoke(compilation_prompt)
+        response = _invoke_llm(market_research_prompt)
         content = response.content if hasattr(response, 'content') else response
 
         if isinstance(content, list) and content and isinstance(content[0], dict) and 'text' in content[0]:
@@ -218,8 +235,12 @@ def generate_strategy(state: GraphState) -> dict:
         goals=campaign_input.goals
     )
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _generate_strategy(prompt):
+        return structured_llm.invoke(prompt)
+
     try:
-        strategy = structured_llm.invoke(strategy_prompt)
+        strategy = _generate_strategy(strategy_prompt)
     except Exception as e:
         print(f"Warning: structured LLM failed: {e}. Falling back to text LLM.")
         # fallback to the plain LLM interface if necessary
@@ -260,8 +281,12 @@ def recommend_channels(state: GraphState) -> dict:
         timeline=campaign_input.timeline
     )
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _recommend_channels(prompt):
+        return structured_llm.invoke(prompt)
+
     try:
-        recommendation = structured_llm.invoke(channel_prompt)
+        recommendation = _recommend_channels(channel_prompt)
         return {"channel_recommendation": recommendation}
     except Exception as e:
         print(f"Warning: Channel recommendation failed: {e}")
@@ -294,8 +319,12 @@ def optimize_budget(state: GraphState) -> dict:
         channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
     )
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _optimize_budget(prompt):
+        return structured_llm.invoke(prompt)
+
     try:
-        allocation = structured_llm.invoke(budget_prompt)
+        allocation = _optimize_budget(budget_prompt)
         return {"budget_allocation": allocation}
     except Exception as e:
         print(f"Warning: Budget optimization failed: {e}")
@@ -331,8 +360,12 @@ def assess_risks(state: GraphState) -> dict:
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _assess_risks(prompt):
+        return structured_llm.invoke(prompt)
+
     try:
-        assessment = structured_llm.invoke(risk_prompt)
+        assessment = _assess_risks(risk_prompt)
         return {"risk_assessment": assessment}
     except Exception as e:
         print(f"Warning: Risk assessment failed: {e}")
@@ -485,8 +518,12 @@ def format_markdown_report(state: GraphState) -> dict:
         success_metrics=risks.success_metrics if risks else 'N/A'
     )
     
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _format_report(prompt):
+        return llm.invoke(prompt)
+
     try:
-        formatted_md = llm.invoke(formatting_prompt)
+        formatted_md = _format_report(formatting_prompt)
         content = formatted_md.content if hasattr(formatted_md, 'content') else formatted_md
         
         if isinstance(content, list) and content and isinstance(content[0], dict) and 'text' in content[0]:
