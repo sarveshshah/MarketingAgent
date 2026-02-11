@@ -13,11 +13,11 @@ You are a Senior Marketing Strategist responsible for defining the high-level st
     {market_trends}
     ```
 3.  **Campaign Mandate:**
-    *   **Campaign Type:** {campaign_input.campaign_type}
-    *   **Target Industry:** {campaign_input.target_industry}
-    *   **Budget:** {campaign_input.budget}
-    *   **Timeline:** {campaign_input.timeline}
-    *   **Goals:** {campaign_input.goals}
+    *   **Campaign Type:** {campaign_type}
+    *   **Target Industry:** {target_industry}
+    *   **Budget:** {budget}
+    *   **Timeline:** {timeline}
+    *   **Goals:** {goals}
 
 ### Task & Instructions
 

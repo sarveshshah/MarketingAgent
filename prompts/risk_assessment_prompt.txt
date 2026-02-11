@@ -5,13 +5,13 @@ You are a seasoned risk management consultant with a specialization in marketing
 ### Context & Data
 
 **Complete Campaign Plan:**
-*   **Campaign Type:** {campaign_input.campaign_type}
-*   **Target Industry:** {campaign_input.target_industry}
-*   **Target Audience:** {strategy.target_audience if strategy else 'N/A'}
-*   **Budget:** {campaign_input.budget}
-*   **Timeline:** {campaign_input.timeline}
-*   **Channels & Budgeting:** {budget_alloc.channel_breakdown if budget_alloc else 'N/A'}
-*   **Historical Data Insights:** {state.get("past_campaign_insights", "N/A")}
+*   **Campaign Type:** {campaign_type}
+*   **Target Industry:** {target_industry}
+*   **Target Audience:** {target_audience}
+*   **Budget:** {budget}
+*   **Timeline:** {timeline}
+*   **Channels & Budgeting:** {channel_breakdown}
+*   **Historical Data Insights:** {past_campaign_insights}
 
 ### Task & Instructions
 

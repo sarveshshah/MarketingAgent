@@ -9,12 +9,12 @@ You are a specialist in digital marketing channel strategy. You have been given 
     {insights}
     ```
 2.  **Approved High-Level Strategy:**
-    *   **Target Audience:** {strategy.target_audience if strategy else 'N/A'}
-    *   **Selected Channels (High-Level):** {strategy.campaign_channels if strategy else 'N/A'}
-    *   **Campaign Type:** {campaign_input.campaign_type}
-    *   **Industry:** {campaign_input.target_industry}
-    *   **Budget:** {campaign_input.budget}
-    *   **Timeline:** {campaign_input.timeline}
+    *   **Target Audience:** {target_audience}
+    *   **Selected Channels (High-Level):** {campaign_channels}
+    *   **Campaign Type:** {campaign_type}
+    *   **Industry:** {target_industry}
+    *   **Budget:** {budget}
+    *   **Timeline:** {timeline}
 
 ### Task & Instructions
 
