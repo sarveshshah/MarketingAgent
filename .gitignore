@@ -5,3 +5,4 @@
 output.md
 .results/
 .old_files/
+utils/__pycache__/

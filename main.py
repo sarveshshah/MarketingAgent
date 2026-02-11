@@ -15,8 +15,8 @@ load_dotenv()
 
 # Add this validation
 import os
-if not os.getenv("GOOGLE_API_KEY"):
-    raise ValueError("GOOGLE_API_KEY not found in environment variables")
+if not os.getenv("GEMINI_API_KEY"):
+    raise ValueError("GEMINI_API_KEY not found in environment variables")
 
 # LLM configurations
 llm = ChatGoogleGenerativeAI(
@@ -200,7 +200,6 @@ def generate_strategy(state: GraphState) -> dict:
     Expects `past_campaign_insights` to be present in the state.
     Returns structured fields that update the state.
     """
-    
     structured_llm = llm.with_structured_output(CampaignStrategy)
 
     campaign_input = state["campaign_input"]
@@ -540,7 +539,7 @@ def save_approved_markdown(state: GraphState) -> dict:
     
     formatted_md = state.get('formatted_markdown', '')
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"outputs/campaign_strategy_{timestamp}.md"
+    filename = f"./outputs/campaign_strategy_{timestamp}.md"
     
     try:
         with open(filename, 'w') as f:
