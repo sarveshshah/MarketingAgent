@@ -9,12 +9,18 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 import pandas as pd
 from datetime import datetime
+from utils.prompt_loader import load_prompt
 
 load_dotenv()
 
+# Add this validation
+import os
+if not os.getenv("GOOGLE_API_KEY"):
+    raise ValueError("GOOGLE_API_KEY not found in environment variables")
+
 # LLM configurations
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3-pro-preview", 
+    model="gemini-3-flash-preview", 
     temperature = 0, 
     verbose=True
     )
@@ -90,60 +96,13 @@ def analyze_past_campaigns(state: GraphState) -> dict:
             max_iterations = 5
         )
 
-        data_analysis_prompt = f"""
-        ### Persona: Expert Marketing Data Analyst
-
-        You are a world-class data analyst with deep expertise in marketing campaign performance. Your sole responsibility is to analyze a pandas DataFrame of historical marketing data to extract actionable, quantitative insights. 
-        You must use the provided pandas DataFrame (`df`) to answer the user's questions.
-
-        ### Task & Context
-
-        Your goal is to inform the strategy for an upcoming **{campaign_input.campaign_type}** campaign targeting the **{campaign_input.target_industry}** industry. The insights you provide will be the foundation for all subsequent strategic decisions, including channel selection, budget allocation, and risk assessment. Accuracy and data-driven rigour are paramount.
-
-        ### Analytical Steps & Required Insights
-
-        You MUST perform the following analysis by writing and executing Python code against the `df`. Address each point explicitly in your response:
-
-        1.  **Channel Performance Analysis:**
-            *   Calculate the **Conversion Rate** for each marketing channel.
-            *   Calculate the **Return on Investment (ROI)** for each channel.
-            *   Identify the **top 3 performing channels** based on a combined ranking of ROI and Conversion Rate. Present this as a summary table.
-
-        2.  **Cost Analysis:**
-            *   Determine the **average Customer Acquisition Cost (CAC)** for each marketing channel.
-            *   Identify the channel with the **lowest CAC**.
-
-        3.  **Audience Demographics:**
-            *   Analyze the `Audience` column to identify demographic segments with the **highest conversion rates**.
-            *   Provide a list of the top 2-3 audience segments to target.
-
-        4.  **Campaign Duration & Seasonality:**
-            *   Calculate the **average and median campaign duration** from the dataset.
-            *   Investigate if there are any **seasonality effects** (e.g., specific months or quarters that show higher performance).
-
-        5.  **Campaign Type Effectiveness:**
-            *   Analyze the performance of different `Campaign Type` categories in the data.
-            *   Identify the **best-performing campaign types** and their typical ROI for the `{campaign_input.target_industry}` sector if possible.
-
-        6.  **Budget Allocation Insights:**
-            *   Based on historical ROI and CAC, provide **data-driven recommendations for budget allocation** across the top-performing channels. Frame this as a percentage breakdown (e.g., "Recommend allocating 50% to Channel A, 30% to Channel B...").
-
-        ### Output Requirements
-
-        You MUST structure your final output as a single, comprehensive markdown document. Do not output any other text or explanation before or after the markdown.
-
-        *   **Use clear headings (`##`)** for each section of the analysis (e.g., `## Channel Performance`, `## Cost Analysis`).
-        *   **Use tables** to present comparative data (e.g., for channel performance).
-        *   **Use bold (`**`)** to highlight key metrics, such as specific ROI percentages, CAC values, and conversion rates.
-        *   **Include a concluding "Executive Summary" section** at the top that lists the 3-5 most critical, actionable insights from your analysis in a bulleted list.
-
-        ### Constraints & Best Practices
-
-        *   **NEVER** invent or assume data. All findings must be directly derived from the provided `df`.
-        *   Show your work by thinking through the steps, but your final answer must be the formatted markdown report.
-        *   Ensure all calculations are accurate.
-        *   The response must be a single, valid markdown block.
-    """
+        # Load prompt template and format with variables
+        data_analysis_prompt = load_prompt(
+            "data_analysis_prompt",
+            campaign_type=campaign_input.campaign_type,
+            target_industry=campaign_input.target_industry
+        )
+        
         # The agent expects a dictionary with an 'input' key.
         agent_response = agent.invoke({"input": data_analysis_prompt})
         # The actual result is in the 'output' key of the response dictionary.
@@ -248,44 +207,17 @@ def generate_strategy(state: GraphState) -> dict:
     data_insights = state.get("past_campaign_insights", "")
     market_trends = state.get("market_trends", "")
 
-    strategy_prompt = f"""
-    ### Persona: Senior Marketing Strategist
-
-    You are a Senior Marketing Strategist responsible for defining the high-level strategic direction of a new campaign. You have just received a detailed data analysis report and a summary of market trends. Your task is to synthesize this information into a core strategy document.
-
-    ### Context & Data
-
-    1.  **Historical Campaign Analysis (from your data analyst):**
-        ```markdown
-        {data_insights}
-        ```
-    2.  **Current Market Trends (from your research team):**
-        ```
-        {market_trends}
-        ```
-    3.  **Campaign Mandate:**
-        *   **Campaign Type:** {campaign_input.campaign_type}
-        *   **Target Industry:** {campaign_input.target_industry}
-        *   **Budget:** {campaign_input.budget}
-        *   **Timeline:** {campaign_input.timeline}
-        *   **Goals:** {campaign_input.goals}
-
-    ### Task & Instructions
-
-    Based *exclusively* on the provided data and campaign mandate, generate a concise, high-level strategy. Your output must be structured according to the `CampaignStrategy` format.
-
-    1.  **`target_audience`**: Synthesize the "Audience Demographics" from the data analysis to create a specific, descriptive persona. Go beyond a simple demographic list; create a narrative description (e.g., "Tech-savvy millennials in urban areas who value sustainability...").
-    2.  **`campaign_channels`**: Based on the "Channel Performance Analysis" (ROI, Conversion Rate), list the top 2-3 most promising channels as a comma-separated string.
-    3.  **`acquisition_cost_estimate`**: Using the "Cost Analysis" data, provide a realistic estimated range for Customer Acquisition Cost (CAC) for the recommended channels.
-    4.  **`expected_roi`**: Based on historical "ROI" data for similar campaigns and channels, provide a specific, quantifiable ROI estimate or range.
-
-    ### Constraints & Best Practices
-
-    *   **Data-Driven:** Every field in your output must be directly justified by the `data_insights` or `market_trends` provided. Do not invent information.
-    *   **Reference Your Sources:** Briefly mention which data point informs your conclusion (e.g., "Targeting millennials based on the high conversion rates reported in the analysis.").
-    *   **Be Concise:** Keep descriptions brief and to the point.
-    *   **Output ONLY the structured data.** Your response will be parsed automatically.
-    """
+    # Load prompt template and format with variables
+    strategy_prompt = load_prompt(
+        "strategy_generation_prompt",
+        data_insights=data_insights,
+        market_trends=market_trends,
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline,
+        goals=campaign_input.goals
+    )
 
     try:
         strategy = structured_llm.invoke(strategy_prompt)
@@ -317,40 +249,17 @@ def recommend_channels(state: GraphState) -> dict:
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
     
-    channel_prompt = f"""
-    ### Persona: Digital Marketing Channel Specialist
-
-    You are a specialist in digital marketing channel strategy. You have been given a high-level strategy and a comprehensive data analysis report. Your task is to provide a detailed and actionable channel recommendation.
-
-    ### Context & Data
-
-    1.  **Data Analysis Report:**
-        ```markdown
-        {insights}
-        ```
-    2.  **Approved High-Level Strategy:**
-        *   **Target Audience:** {strategy.target_audience if strategy else 'N/A'}
-        *   **Selected Channels (High-Level):** {strategy.campaign_channels if strategy else 'N/A'}
-        *   **Campaign Type:** {campaign_input.campaign_type}
-        *   **Industry:** {campaign_input.target_industry}
-        *   **Budget:** {campaign_input.budget}
-        *   **Timeline:** {campaign_input.timeline}
-
-    ### Task & Instructions
-
-    Your task is to elaborate on the high-level strategy by providing a detailed recommendation for the top marketing channels. Your output must conform to the `ChannelRecommendation` structure.
-
-    1.  **`primary_channels`**: List the top 2-3 marketing channels. For each channel, recommend a specific budget percentage allocation. This must be a single string (e.g., "Email Marketing (40%), LinkedIn Ads (35%), Google Search (25%)"). The allocation should be directly informed by the ROI and CAC data in the analysis.
-    2.  **`channel_rationale`**: For each recommended channel, provide a concise, data-driven justification. Reference specific metrics from the `insights` (e.g., "LinkedIn Ads are recommended due to its **12% conversion rate** with the target demographic, as noted in the analysis.").
-    3.  **`expected_reach`**: For each channel, provide a *quantifiable* estimate of reach, engagement, or other relevant KPIs. Base these estimates on the historical data provided in the `insights`.
-
-    ### Constraints & Best Practices
-
-    *   **Be Specific and Quantitative:** Avoid vague statements. Use the numbers from the data analysis.
-    *   **Justify Everything:** Explicitly link your recommendations back to the provided `insights`.
-    *   **Align with Strategy:** Ensure your channel choices and rationale align perfectly with the `target_audience` defined in the strategy.
-    *   **Output ONLY the structured data.**
-    """
+    # Load prompt template and format with variables
+    channel_prompt = load_prompt(
+        "channel_recommendation_prompt",
+        insights=insights,
+        target_audience=strategy.target_audience if strategy else 'N/A',
+        campaign_channels=strategy.campaign_channels if strategy else 'N/A',
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline
+    )
     
     try:
         recommendation = structured_llm.invoke(channel_prompt)
@@ -376,36 +285,16 @@ def optimize_budget(state: GraphState) -> dict:
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
     
-    budget_prompt = f"""
-    ### Persona: Marketing Operations & Finance Analyst
-
-    You are a meticulous financial analyst specializing in marketing budget optimization. You have been provided with the campaign's channel strategy and overall budget. Your task is to create a detailed, phased budget plan.
-
-    ### Context & Data
-
-    1.  **Campaign Mandate:**
-        *   **Total Budget:** {campaign_input.budget}
-        *   **Timeline:** {campaign_input.timeline}
-        *   **Goals:** {campaign_input.goals}
-    2.  **Approved Channel Strategy:**
-        *   **Recommended Channels & Allocation:** {channel_rec.primary_channels if channel_rec else 'N/A'}
-        *   **Channel Rationale:** {channel_rec.channel_rationale if channel_rec else 'N/A'}
-
-    ### Task & Instructions
-
-    Create a detailed budget allocation plan that breaks down the total budget across channels and time. Your output must conform to the `BudgetAllocation` structure.
-
-    1.  **`channel_breakdown`**: Confirm and list the final budget allocation percentages per channel as a single string. This should match the input from the channel strategist (e.g., "Email: 40%, LinkedIn Ads: 35%, Google Search: 25%").
-    2.  **`timeline_phases`**: Divide the campaign `timeline` into logical phases (e.g., "Month 1-2: Awareness", "Month 3-5: Conversion", "Month 6: Optimization"). Allocate a percentage of the *total budget* to each phase. This should be a single string.
-    3.  **`contingency_plan`**: Recommend a specific percentage of the total budget to be held in reserve as a contingency fund. Provide a brief justification (e.g., "A 10% contingency fund is recommended to address unforeseen opportunities or underperforming channels.").
-
-    ### Constraints & Best Practices
-
-    *   **Mathematical Accuracy:** Ensure all percentages in `channel_breakdown` and `timeline_phases` add up to 100% (excluding the contingency).
-    *   **Logical Phasing:** The timeline phases should be logical for the campaign type and duration.
-    *   **Clarity and Conciseness:** Present the information clearly and without unnecessary jargon.
-    *   **Output ONLY the structured data.**
-    """
+    # Load prompt template and format with variables
+    budget_prompt = load_prompt(
+        "budget_optimization_prompt",
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline,
+        goals=campaign_input.goals,
+        primary_channels=channel_rec.primary_channels if channel_rec else 'N/A',
+        channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
+    )
+    
     try:
         allocation = structured_llm.invoke(budget_prompt)
         return {"budget_allocation": allocation}
@@ -431,37 +320,17 @@ def assess_risks(state: GraphState) -> dict:
     budget_alloc = state.get("budget_allocation")
     campaign_input = state["campaign_input"]
     
-    risk_prompt = f"""
-    ### Persona: Senior Marketing Risk Analyst
-
-    You are a seasoned risk management consultant with a specialization in marketing campaigns. You have been given the complete campaign strategy. Your task is to identify potential risks and develop a proactive plan to manage them.
-
-    ### Context & Data
-
-    **Complete Campaign Plan:**
-    *   **Campaign Type:** {campaign_input.campaign_type}
-    *   **Target Industry:** {campaign_input.target_industry}
-    *   **Target Audience:** {strategy.target_audience if strategy else 'N/A'}
-    *   **Budget:** {campaign_input.budget}
-    *   **Timeline:** {campaign_input.timeline}
-    *   **Channels & Budgeting:** {budget_alloc.channel_breakdown if budget_alloc else 'N/A'}
-    *   **Historical Data Insights:** {state.get("past_campaign_insights", "N/A")}
-
-    ### Task & Instructions
-
-    Identify potential risks and prepare a mitigation plan. Your output must conform to the `RiskAssessment` structure.
-
-    1.  **`identified_risks`**: Identify the top 3-5 potential risks specific to this campaign. For each risk, provide a brief description and rank its severity (e.g., "High: Key channel underperforms ROI target," "Medium: Competitor launches a similar campaign," "Low: Negative social media sentiment.").
-    2.  **`mitigation_strategies`**: For each identified risk, propose a concrete, actionable mitigation strategy. What steps will you take if the risk materializes? (e.g., "For underperforming channels, reallocate budget to the next best performing channel within 2 weeks.").
-    3.  **`success_metrics`**: For each risk, define the specific Key Performance Indicator (KPI) or metric that will be used to monitor it. These are your early warning indicators (e.g., "Weekly review of channel ROI and CAC against benchmarks from data analysis.").
-
-    ### Constraints & Best Practices
-
-    *   **Be Specific, Not Generic:** Risks should be tailored to this campaign (e.g., instead of "Bad PR," use "Negative reviews from tech influencers about the new phone's battery life.").
-    *   **Action-Oriented:** Mitigation strategies should be practical and executable.
-    *   **Data-Informed:** Where possible, use the historical data to inform potential risks (e.g., "Risk of high CAC on social media, as seen in previous campaigns.").
-    *   **Output ONLY the structured data.**
-    """
+    # Load prompt template and format with variables
+    risk_prompt = load_prompt(
+        "risk_assessment_prompt",
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        target_audience=strategy.target_audience if strategy else 'N/A',
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline,
+        channel_breakdown=budget_alloc.channel_breakdown if budget_alloc else 'N/A',
+        past_campaign_insights=state.get("past_campaign_insights", "N/A")
+    )
     
     try:
         assessment = structured_llm.invoke(risk_prompt)
@@ -592,70 +461,30 @@ def format_markdown_report(state: GraphState) -> dict:
     risks = state.get('risk_assessment')
     campaign_input = state["campaign_input"]
     
-    formatting_prompt = f"""
-    ### Persona: Executive Communications Expert & Designer
-
-    You are an expert in creating high-impact business reports for executive audiences. You specialize in transforming raw data and strategic points into a polished, professional, and visually appealing markdown document.
-
-    ### Task & Context
-
-    You have been given all the final components of a marketing strategy, generated by a team of specialists. Your task is to assemble these components into a single, cohesive, and beautifully formatted markdown report. This report will be presented to senior leadership.
-
-    ### Raw Report Components:
-
-    **1. Campaign Overview:**
-    *   **Type:** {campaign_input.campaign_type}
-    *   **Industry:** {campaign_input.target_industry}
-    *   **Budget:** {campaign_input.budget}
-    *   **Timeline:** {campaign_input.timeline}
-    *   **Goals:** {campaign_input.goals}
-
-    **2. Data Insights & Market Trends:**
-    *   **Historical Analysis Summary:** {state.get("past_campaign_insights", "N/A")}
-    *   **Market Trends Summary:** {state.get("market_trends", "N/A")}
-
-    **3. Core Strategy:**
-    *   **Target Audience:** {strategy.target_audience if strategy else 'N/A'}
-    *   **Key Channels:** {strategy.campaign_channels if strategy else 'N/A'}
-    *   **Estimated CAC:** {strategy.acquisition_cost_estimate if strategy else 'N/A'}
-    *   **Expected ROI:** {strategy.expected_roi if strategy else 'N/A'}
-
-    **4. Detailed Channel Plan:**
-    *   **Primary Channels & Budget %:** {channels.primary_channels if channels else 'N/A'}
-    *   **Rationale:** {channels.channel_rationale if channels else 'N/A'}
-    *   **Expected Reach/KPIs:** {channels.expected_reach if channels else 'N/A'}
-
-    **5. Budget & Timeline:**
-    *   **Channel Breakdown:** {budget.channel_breakdown if budget else 'N/A'}
-    *   **Phasing:** {budget.timeline_phases if budget else 'N/A'}
-    *   **Contingency:** {budget.contingency_plan if budget else 'N/A'}
-
-    **6. Risk Management Plan:**
-    *   **Identified Risks:** {risks.identified_risks if risks else 'N/A'}
-    *   **Mitigation Strategies:** {risks.mitigation_strategies if risks else 'N/A'}
-    *   **Monitoring KPIs:** {risks.success_metrics if risks else 'N/A'}
-
-    ### Output Requirements
-
-    Produce a single, elegant markdown report. Your output must be **ONLY the markdown code**.
-
-    *   **Structure:**
-        1.  **Title:** Start with a `# Marketing Strategy:` followed by the campaign type.
-        2.  **Executive Summary:** A short, impactful summary (2-3 sentences) of the campaign's goal and expected outcome.
-        3.  **Campaign Overview:** Use a markdown table to present the overview details.
-        4.  **Strategic Foundation:** Create a section that includes `## Data-Driven Insights` and `## Market Trends`, summarizing the key inputs.
-        5.  **Core Strategy:** Create a `## Recommended Strategy` section with clear sub-headings (`### Target Audience`, `### Core Channels`, etc.).
-        6.  **Execution Plan:** Create a `## Execution Plan` section with `### Channel & Budget Allocation` and `### Phased Timeline` sub-headings. Use tables for clarity.
-        7.  **Risk Management:** Create a final `## Risk & Mitigation Plan` section, using a table to lay out risks, mitigation steps, and KPIs.
-    *   **Formatting:**
-        *   Use headings (`#`, `##`, `###`) to create a clear hierarchy.
-        *   Use bold (`**`) and italics (`*`) to emphasize key terms, metrics, and takeaways.
-        *   Use bullet points (`*`) for lists.
-        *   Use tables for structured data to improve readability.
-
-    ### Final Instruction:
-    Review all the provided components and synthesize them into a single, polished, and professional report. Return **ONLY** the markdown. Do not include any other commentary.
-    """
+    # Load prompt template and format with variables
+    formatting_prompt = load_prompt(
+        "markdown_formatting_prompt",
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline,
+        goals=campaign_input.goals,
+        past_campaign_insights=state.get("past_campaign_insights", "N/A"),
+        market_trends=state.get("market_trends", "N/A"),
+        target_audience=strategy.target_audience if strategy else 'N/A',
+        campaign_channels=strategy.campaign_channels if strategy else 'N/A',
+        acquisition_cost_estimate=strategy.acquisition_cost_estimate if strategy else 'N/A',
+        expected_roi=strategy.expected_roi if strategy else 'N/A',
+        primary_channels=channels.primary_channels if channels else 'N/A',
+        channel_rationale=channels.channel_rationale if channels else 'N/A',
+        expected_reach=channels.expected_reach if channels else 'N/A',
+        channel_breakdown=budget.channel_breakdown if budget else 'N/A',
+        timeline_phases=budget.timeline_phases if budget else 'N/A',
+        contingency_plan=budget.contingency_plan if budget else 'N/A',
+        identified_risks=risks.identified_risks if risks else 'N/A',
+        mitigation_strategies=risks.mitigation_strategies if risks else 'N/A',
+        success_metrics=risks.success_metrics if risks else 'N/A'
+    )
     
     try:
         formatted_md = llm.invoke(formatting_prompt)
@@ -711,7 +540,7 @@ def save_approved_markdown(state: GraphState) -> dict:
     
     formatted_md = state.get('formatted_markdown', '')
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"campaign_strategy_{timestamp}.md"
+    filename = f"outputs/campaign_strategy_{timestamp}.md"
     
     try:
         with open(filename, 'w') as f:
@@ -736,9 +565,15 @@ builder.add_node("human_approval_step", human_approval_step)
 builder.add_node("save_approved_markdown", save_approved_markdown)
 
 builder.add_edge(START, "collect_campaign_input")
+
+# Parallel execution: both nodes only depend on campaign_input
 builder.add_edge("collect_campaign_input", "analyze_past_campaigns")
-builder.add_edge("analyze_past_campaigns", "conduct_market_research")
+builder.add_edge("collect_campaign_input", "conduct_market_research")
+
+# generate_strategy waits for both parallel nodes to complete
+builder.add_edge("analyze_past_campaigns", "generate_strategy")
 builder.add_edge("conduct_market_research", "generate_strategy")
+
 builder.add_edge("generate_strategy", "recommend_channels")
 builder.add_edge("recommend_channels", "optimize_budget")
 builder.add_edge("optimize_budget", "assess_risks")
