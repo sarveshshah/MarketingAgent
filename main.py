@@ -4,6 +4,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
+from langchain_community.tools import DuckDuckGoSearchRun
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 import pandas as pd
@@ -11,7 +12,7 @@ from datetime import datetime
 
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", verbose=True)
 
 # Structure for the LLM to generate the strategy
 class CampaignStrategy(BaseModel):
@@ -43,10 +44,13 @@ class GraphState(TypedDict):
     timeline: str
     goals: str
     past_campaign_insights: str
+    market_trends: str
     strategy: Optional[CampaignStrategy]
     channel_recommendation: Optional[ChannelRecommendation]
     budget_allocation: Optional[BudgetAllocation]
     risk_assessment: Optional[RiskAssessment]
+    formatted_markdown: Optional[str]
+    human_approval: Optional[bool]
 
 def analyze_past_campaigns(state: GraphState) -> dict:
     """Analyze past campaign data and return data-driven insights only.
@@ -61,12 +65,12 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     agent = create_pandas_dataframe_agent(
         llm,
         df,
-        verbose=False,
+        verbose=True,
         allow_dangerous_code=True,
     )
 
     data_analysis_prompt = f"""
-    You are a data analyst specializing in marketing campaigns. 
+    You are a data analyst specializing in marketing campaigns. Your task is to do data analysis from provided dataset and extract actionable insights to inform a marketing strategy.
     Analyze the marketing campaign dataset to answer these specific questions for a {state.get('campaign_type', 'general')} campaign targeting {state.get('target_industry', 'the market')}:
 
     1. Top performing channels by conversion rate and ROI
@@ -76,9 +80,10 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     5. Best performing campaign types and typical ROI
     6. Budget allocation recommendations based on historical data
 
-    Return clear data points, lists, and numeric metrics where possible.
+    Also, identify any clear trends or patterns in the data that could inform the strategy, such as seasonality effects, industry-specific insights, or emerging channel performance and feel free to do any further analysis as needed. 
+    Focus on actionable insights that can directly inform the marketing strategy development.
+    Return clear data points, lists, and numeric metrics where possible. Output results in a rich markdown format with tables and bullet points for easy consumption by the next node. 
     """
-
     try:
         agent_response = agent.invoke(data_analysis_prompt)
         data_insights = str(agent_response)
@@ -88,6 +93,21 @@ def analyze_past_campaigns(state: GraphState) -> dict:
 
     # Return only the data insights to be consumed by the next node
     return {"past_campaign_insights": data_insights}
+
+
+def conduct_market_research(state: GraphState) -> dict:
+    """Conduct market research to find current trends using a search tool."""
+    
+    print("Conducting market research...")
+    try:
+        search = DuckDuckGoSearchRun()
+        query = f"latest marketing trends for {state.get('campaign_type')} in {state.get('target_industry')} industry {datetime.now().year}"
+        results = search.invoke(query)
+    except Exception as e:
+        print(f"Warning: Market research failed: {e}")
+        results = "Market research unavailable."
+    
+    return {"market_trends": results}
 
 
 def generate_strategy(state: GraphState) -> dict:
@@ -100,13 +120,17 @@ def generate_strategy(state: GraphState) -> dict:
     structured_llm = llm.with_structured_output(CampaignStrategy)
 
     data_insights = state.get("past_campaign_insights", "")
+    market_trends = state.get("market_trends", "")
 
     strategy_prompt = f"""
-    Using the following historical campaign analysis:
-
-    {data_insights}
-
+    You are a marketing strategist tasked with creating a concise, data-driven marketing strategy for a specific campaign. 
     Create a concise, data-driven marketing strategy for the user's requested campaign:
+
+    Use the following insights:
+    1. Historical Campaign Analysis: {data_insights}
+    2. Current Market Trends: {market_trends}
+    
+    Develop a targeted strategy that aligns with the user's campaign requirements:
     - Campaign Type: {state.get('campaign_type', 'N/A')}
     - Target Industry: {state.get('target_industry', 'N/A')}
     - Budget: {state.get('budget', 'N/A')}
@@ -119,7 +143,8 @@ def generate_strategy(state: GraphState) -> dict:
     3. `acquisition_cost_estimate` as a short numeric estimate or range
     4. `expected_roi` as a short estimate
 
-    Make sure each recommendation explicitly references the data points from the analysis where applicable.
+    Make sure each recommendation explicitly references the data points from the analysis where applicable. 
+    Focus on creating a strategy that is realistic and directly informed by the data insights, rather than generic best practices.
     """
 
     try:
@@ -152,6 +177,9 @@ def recommend_channels(state: GraphState) -> dict:
     insights = state.get("past_campaign_insights", "")
     
     channel_prompt = f"""
+    You are a helpful marketing consultant specializing in channel strategy. 
+    Your task is to recommend the best marketing channels for a campaign based on historical data insights and the specific campaign profile provided by your strategist colleague.
+
     Based on this data analysis:
     {insights}
     
@@ -162,12 +190,13 @@ def recommend_channels(state: GraphState) -> dict:
     - Budget: {state.get('budget', 'N/A')}
     - Timeline: {state.get('timeline', 'N/A')}
     
-    Recommend the 2-3 best marketing channels with:
+    Recommend the 3 best marketing channels with:
     1. Specific channel names and recommended budget percentages
     2. Clear rationale based on the data insights and campaign profile
     3. Expected reach, engagement rates, and conversion metrics for each channel
     
-    Prioritize channels with the highest ROI for this specific campaign type and audience.
+    Prioritize channels with the highest ROI and conversion rate for this specific campaign type and audience. 
+    Rank order the three options and provide detailed reasoning for why each channel is recommended, referencing the data insights where applicable.
     """
     
     try:
@@ -197,6 +226,8 @@ def optimize_budget(state: GraphState) -> dict:
     goals = state.get("goals", "N/A")
     
     budget_prompt = f"""
+    You are a marketing budget specialist. Your task is to create a detailed budget allocation plan for a marketing campaign based on the recommended channels and campaign profile provided by your channel strategy colleague.
+
     Create a detailed budget allocation plan for this campaign:
     - Total Budget: {budget}
     - Timeline: {timeline}
@@ -210,7 +241,6 @@ def optimize_budget(state: GraphState) -> dict:
     
     Ensure the percentages add up to 100% and align with the channel recommendations.
     """
-    
     try:
         allocation = structured_llm.invoke(budget_prompt)
         return {"budget_allocation": allocation}
@@ -236,6 +266,8 @@ def assess_risks(state: GraphState) -> dict:
     budget_alloc = state.get("budget_allocation")
     
     risk_prompt = f"""
+    You are a risk management consultant for marketing campaigns. Your task is to identify potential risks for a specific campaign profile and provide actionable mitigation strategies and success metrics.
+
     Assess risks for this marketing campaign:
     - Campaign Type: {state.get('campaign_type', 'N/A')}
     - Target Industry: {state.get('target_industry', 'N/A')}
@@ -278,20 +310,220 @@ def collect_campaign_input() -> dict:
     
     return campaign_input
 
+def generate_fallback_report(state: GraphState) -> str:
+    """Generate a basic markdown report (fallback if LLM formatting fails)"""
+    
+    strategy = state.get('strategy')
+    channels = state.get('channel_recommendation')
+    budget = state.get('budget_allocation')
+    risks = state.get('risk_assessment')
+    insights = state.get('past_campaign_insights', '')
+    trends = state.get('market_trends', '')
+    
+    markdown_content = f"""# Marketing Campaign Strategy Report
+
+    **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+    ## Campaign Overview
+
+    | Aspect | Details |
+    |--------|---------|
+    | Campaign Type | {state.get('campaign_type', 'N/A')} |
+    | Target Industry | {state.get('target_industry', 'N/A')} |
+    | Budget | {state.get('budget', 'N/A')} |
+    | Timeline | {state.get('timeline', 'N/A')} |
+    | Goals | {state.get('goals', 'N/A')} |
+
+    ---
+
+    ## 📊 Data-Driven Insights
+    ### Historical Campaign Analysis
+    {insights}
+    
+    ### Market Trends
+    {trends}
+
+    ---
+
+    ## 🎯 Recommended Strategy
+    ### Target Audience
+    {strategy.target_audience if strategy else 'N/A'}
+    ### Campaign Channels
+    {strategy.campaign_channels if strategy else 'N/A'}
+    ### Acquisition Cost Estimate
+    {strategy.acquisition_cost_estimate if strategy else 'N/A'}
+    ### Expected ROI
+    {strategy.expected_roi if strategy else 'N/A'}
+
+    ---
+
+    ## 📡 Channel Recommendations
+    ### Primary Channels
+    {channels.primary_channels if channels else 'N/A'}
+    ### Channel Rationale
+    {channels.channel_rationale if channels else 'N/A'}
+    ### Expected Reach & Engagement
+    {channels.expected_reach if channels else 'N/A'}
+
+    ---
+
+    ## 💵 Budget Optimization Plan
+    ### Channel Breakdown
+    {budget.channel_breakdown if budget else 'N/A'}
+    ### Timeline Phases
+    {budget.timeline_phases if budget else 'N/A'}
+    ### Contingency Plan
+    {budget.contingency_plan if budget else 'N/A'}
+
+    ---
+
+    ## ⚠️ Risk Assessment & Mitigation
+    ### Identified Risks
+    {risks.identified_risks if risks else 'N/A'}
+    ### Mitigation Strategies
+    {risks.mitigation_strategies if risks else 'N/A'}
+    ### Success Metrics & KPIs
+    {risks.success_metrics if risks else 'N/A'}
+
+    ---
+    
+    *This strategy was developed by analyzing historical campaign data and generating recommendations tailored to your specific campaign requirements using AI-powered marketing insights.*
+    """
+    return markdown_content
+
+
+def format_markdown_report(state: GraphState) -> dict:
+    """Format the strategy into a beautiful, well-structured markdown document.
+    
+    Uses an LLM to enhance the markdown with better formatting, sections,
+    and professional presentation.
+    """
+    
+    strategy = state.get('strategy')
+    channels = state.get('channel_recommendation')
+    budget = state.get('budget_allocation')
+    risks = state.get('risk_assessment')
+    
+    formatting_prompt = f"""
+    You are a professional marketing report formatter. Transform this campaign data into beautiful, 
+    well-structured markdown that's easy to read and actionable:
+    
+    CAMPAIGN OVERVIEW:
+    - Type: {state.get('campaign_type', 'N/A')}
+    - Industry: {state.get('target_industry', 'N/A')}
+    - Budget: {state.get('budget', 'N/A')}
+    - Timeline: {state.get('timeline', 'N/A')}
+    - Goals: {state.get('goals', 'N/A')}
+    
+    STRATEGY DETAILS:
+    - Target Audience: {strategy.target_audience if strategy else 'N/A'}
+    - Channels: {strategy.campaign_channels if strategy else 'N/A'}
+    - CAC: {strategy.acquisition_cost_estimate if strategy else 'N/A'}
+    - Expected ROI: {strategy.expected_roi if strategy else 'N/A'}
+    
+    CHANNEL RECOMMENDATIONS:
+    - Channels: {channels.primary_channels if channels else 'N/A'}
+    - Rationale: {channels.channel_rationale if channels else 'N/A'}
+    - Expected Reach: {channels.expected_reach if channels else 'N/A'}
+    
+    BUDGET ALLOCATION:
+    - Breakdown: {budget.channel_breakdown if budget else 'N/A'}
+    - Timeline: {budget.timeline_phases if budget else 'N/A'}
+    - Contingency: {budget.contingency_plan if budget else 'N/A'}
+    
+    RISKS & MITIGATION:
+    - Risks: {risks.identified_risks if risks else 'N/A'}
+    - Mitigation: {risks.mitigation_strategies if risks else 'N/A'}
+    - Metrics: {risks.success_metrics if risks else 'N/A'}
+    
+    Create professional markdown with:
+    1. Clear sections with ## headers
+    2. Bullet points for key takeaways
+    3. Tables where appropriate
+    4. Emphasis (bold/italic) on important metrics
+    5. Action items clearly highlighted
+    6. Executive summary at the top
+    
+    Return ONLY the markdown, no explanations.
+    """
+    
+    try:
+        formatted_md = llm.invoke(formatting_prompt)
+        formatted_content = formatted_md.content if hasattr(formatted_md, 'content') else str(formatted_md)
+        return {"formatted_markdown": formatted_content}
+    except Exception as e:
+        print(f"Warning: Markdown formatting failed: {e}")
+        # Fallback to basic structure
+        return {"formatted_markdown": generate_fallback_report(state)}
+
+
+def human_approval_step(state: GraphState) -> dict:
+    """Ask user to review and approve the markdown before saving.
+    
+    Displays the formatted markdown and waits for user confirmation.
+    """
+    
+    formatted_md = state.get('formatted_markdown', '')
+    
+    print("\n" + "="*70)
+    print("📋 FORMATTED MARKDOWN REPORT")
+    print("="*70)
+    print(formatted_md[:2000])  # Preview first 2000 chars
+    print("\n... (full report shown above) ...\n")
+    
+    print("="*70)
+    approval = input("\n✓ Save this report to markdown? (yes/no): ").strip().lower()
+    human_approved = approval in ['yes', 'y', 'true', '1']
+    
+    return {"human_approval": human_approved}
+
+
+def save_approved_markdown(state: GraphState) -> dict:
+    """Save the markdown file if approved by human.
+    
+    Only executes if human_approval is True.
+    Returns the filename or None if not approved.
+    """
+    
+    if not state.get('human_approval', False):
+        print("\nReport NOT saved. No confirmation received.")
+        return {"formatted_markdown": ""}  # Clear from state
+    
+    formatted_md = state.get('formatted_markdown', '')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"campaign_strategy_{timestamp}.md"
+    
+    try:
+        with open(filename, 'w') as f:
+            f.write(formatted_md)
+        print(f"\nReport successfully saved to: {filename}")
+        return {"formatted_markdown": filename}
+    except Exception as e:
+        print(f"Error saving file: {e}")
+        return {"formatted_markdown": ""}
+
 # Build the graph
 builder = StateGraph(GraphState)
 builder.add_node("analyze_past_campaigns", analyze_past_campaigns)
+builder.add_node("conduct_market_research", conduct_market_research)
 builder.add_node("generate_strategy", generate_strategy)
 builder.add_node("recommend_channels", recommend_channels)
 builder.add_node("optimize_budget", optimize_budget)
 builder.add_node("assess_risks", assess_risks)
+builder.add_node("format_markdown_report", format_markdown_report)
+builder.add_node("human_approval_step", human_approval_step)
+builder.add_node("save_approved_markdown", save_approved_markdown)
 
 builder.add_edge(START, "analyze_past_campaigns")
-builder.add_edge("analyze_past_campaigns", "generate_strategy")
+builder.add_edge("analyze_past_campaigns", "conduct_market_research")
+builder.add_edge("conduct_market_research", "generate_strategy")
 builder.add_edge("generate_strategy", "recommend_channels")
 builder.add_edge("recommend_channels", "optimize_budget")
 builder.add_edge("optimize_budget", "assess_risks")
-builder.add_edge("assess_risks", END)
+builder.add_edge("assess_risks", "format_markdown_report")
+builder.add_edge("format_markdown_report", "human_approval_step")
+builder.add_edge("human_approval_step", "save_approved_markdown")
+builder.add_edge("save_approved_markdown", END)
 
 app = builder.compile()
 
@@ -313,62 +545,15 @@ initial_state = {
     "timeline": campaign_input["timeline"],
     "goals": campaign_input["goals"],
     "past_campaign_insights": "",
+    "market_trends": "",
     "strategy": None,
     "channel_recommendation": None,
     "budget_allocation": None,
-    "risk_assessment": None
+    "risk_assessment": None,
+    "formatted_markdown": None,
+    "human_approval": False
 }
 
 # Run graph with user-provided campaign input
 print("\nAnalyzing campaign requirements...")
 result = app.invoke(initial_state)
-print("\n" + "="*70)
-print("MARKETING CAMPAIGN STRATEGY REPORT")
-print("="*70)
-
-print("\n📊 DATA-DRIVEN INSIGHTS (Historical Campaign Analysis):")
-print("-" * 70)
-print(result.get('past_campaign_insights', 'No insights available')[:500])
-
-print("\n" + "="*70)
-print("🎯 RECOMMENDED STRATEGY")
-print("="*70)
-
-strategy = result.get('strategy')
-if strategy:
-    print(f"\n👥 Target Audience:\n{strategy.target_audience}")
-    print(f"\n📢 Campaign Channels:\n{strategy.campaign_channels}")
-    print(f"\n💰 Acquisition Cost Estimate:\n{strategy.acquisition_cost_estimate}")
-    print(f"\n📈 Expected ROI:\n{strategy.expected_roi}")
-
-print("\n" + "="*70)
-print("📡 CHANNEL RECOMMENDATIONS")
-print("="*70)
-
-channels = result.get('channel_recommendation')
-if channels:
-    print(f"\n🔝 Primary Channels:\n{channels.primary_channels}")
-    print(f"\n💭 Rationale:\n{channels.channel_rationale}")
-    print(f"\n🎯 Expected Reach:\n{channels.expected_reach}")
-
-print("\n" + "="*70)
-print("💵 BUDGET OPTIMIZATION")
-print("="*70)
-
-budget = result.get('budget_allocation')
-if budget:
-    print(f"\n📊 Channel Breakdown:\n{budget.channel_breakdown}")
-    print(f"\n📅 Timeline Phases:\n{budget.timeline_phases}")
-    print(f"\n🛡️ Contingency Plan:\n{budget.contingency_plan}")
-
-print("\n" + "="*70)
-print("⚠️  RISK ASSESSMENT & MITIGATION")
-print("="*70)
-
-risks = result.get('risk_assessment')
-if risks:
-    print(f"\n🚨 Identified Risks:\n{risks.identified_risks}")
-    print(f"\n✅ Mitigation Strategies:\n{risks.mitigation_strategies}")
-    print(f"\n📊 Success Metrics:\n{risks.success_metrics}")
-
-print("\n" + "="*70)
