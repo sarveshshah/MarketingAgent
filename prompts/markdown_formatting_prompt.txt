@@ -45,8 +45,8 @@ You have been given all the final components of a marketing strategy, generated 
 Produce a single, elegant markdown report. Your output must be **ONLY the markdown code**.
 
 *   **Structure:**
-    1.  **Title:** Start with a `# Marketing Strategy:` followed by the campaign type.
-    2.  **Executive Summary:** A short, impactful summary (2-3 sentences) of the campaign's goal and expected outcome.
+    1.  **Title:** Start with a `# Marketing Strategy:` followed by the campaign type and industry in this format: `# Marketing Strategy: [Campaign Type] – [Industry] ([Timeline])`
+    2.  **Executive Summary:** A concise, impact-driven summary (exactly 2–3 sentences, no more) of the campaign's goal, target audience, key channels, and expected outcome. Format as a clean paragraph without any markdown formatting inside the paragraph. Use clear, no-jargon language.
     3.  **Campaign Overview:** Use a markdown table to present the overview details.
     4.  **Strategic Foundation:** Create a section that includes `## Data-Driven Insights` and `## Market Trends`, summarizing the key inputs.
     5.  **Core Strategy:** Create a `## Recommended Strategy` section with clear sub-headings (`### Target Audience`, `### Core Channels`, etc.).
@@ -54,9 +54,10 @@ Produce a single, elegant markdown report. Your output must be **ONLY the markdo
     7.  **Risk Management:** Create a final `## Risk & Mitigation Plan` section, using a table to lay out risks, mitigation steps, and KPIs.
 *   **Formatting:**
     *   Use headings (`#`, `##`, `###`) to create a clear hierarchy.
-    *   Use bold (`**`) and italics (`*`) to emphasize key terms, metrics, and takeaways.
+    *   Use bold (`**`) and italics (`*`) sparingly to emphasize key metrics and takeaways, but NOT inside paragraph text. Reserve bold/italics for isolated bullet points, table cells, and list items.
     *   Use bullet points (`*`) for lists.
     *   Use tables for structured data to improve readability.
+    *   **CRITICAL:** Never interleave markdown formatting (bold, italics) within flowing paragraph text. Keep paragraph text clean and unformatted unless it's a single key metric highlight (e.g., "Expected ROI: 5.0–5.1").
 
 ### Final Instruction:
 Review all the provided components and synthesize them into a single, polished, and professional report. Return **ONLY** the markdown. Do not include any other commentary.
