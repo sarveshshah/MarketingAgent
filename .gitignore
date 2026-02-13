@@ -8,3 +8,5 @@ output.md
 utils/__pycache__/
 **/.DS_Store
 __pycache__/*
+outputs/
+logs/

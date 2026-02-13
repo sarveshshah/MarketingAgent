@@ -2,13 +2,18 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
+import logging
 
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_experimental.agents.agent_toolkits import create_pandas_dataframe_agent
+from langchain_openai import ChatOpenAI
+from langchain_experimental.tools import PythonREPLTool
+from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools import DuckDuckGoSearchRun
 
 from tenacity import retry, stop_after_attempt, wait_exponential
+import io
 
 from typing import Any, Optional
 from pydantic import BaseModel, Field
@@ -16,12 +21,53 @@ from typing_extensions import TypedDict
 
 load_dotenv()
 
+# Set up logging to file and console
+logs_dir = Path("logs")
+logs_dir.mkdir(parents=True, exist_ok=True)
+
+log_filename = logs_dir / f"campaign_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Create logger
+logger = logging.getLogger("MarketingAgent")
+logger.setLevel(logging.INFO)
+
+# File handler with detailed format
+file_handler = logging.FileHandler(log_filename, encoding="utf-8")
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+file_handler.setFormatter(file_formatter)
+
+# Console handler with simpler format
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter("%(message)s")
+console_handler.setFormatter(console_formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+logger.info(f"MarketingAgent session started. Log file: {log_filename}")
+
+# Suppress verbose logging from LangChain and related libraries
+logging.getLogger("langchain").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 # LLM configurations
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3-flash-preview", 
-    temperature = 0, 
-    verbose=True
-    )
+data_analyst_llm = ChatGoogleGenerativeAI(
+    model="gemini-3-pro-preview", 
+    temperature=0, 
+    verbose=False
+)
+
+llm = ChatOpenAI(
+    model="gpt-5.1", 
+    temperature=0, 
+    verbose=False
+)
 
 # Helper function to load and format prompt templates from the prompts directory
 def load_prompt(prompt_name: str, **kwargs: Any) -> str:
@@ -97,6 +143,10 @@ class GraphState(TypedDict):
 def collect_campaign_input(state: GraphState) -> dict:
     """Collect marketing campaign information from user"""
     
+    # If input is already provided in state (e.g. from UI), use it
+    if state.get("campaign_input"):
+        return {}
+
     # For easy testing purposes
     campaign_input = {
         "campaign_type": "New Phone Launch",
@@ -118,7 +168,52 @@ def collect_campaign_input(state: GraphState) -> dict:
     
     return {"campaign_input": CampaignInput(**campaign_input)}
 
-# First node: Collect campaign input from user
+
+# Data analysis agent: uses Python REPL to analyze the dataframe
+def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
+    """Data analysis agent that uses a Python REPL tool to analyze the dataframe and extract insights."""
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    def _invoke_agent(agent_executor, prompt_input):
+        return agent_executor.invoke(prompt_input)
+    
+    # Create a Python REPL tool with the dataframe in its local scope
+    tools = [PythonREPLTool(locals={"df": df})]
+
+    # Construct a prompt that includes the dataframe schema
+    buffer = io.StringIO()
+    df.info(buf=buffer)
+    df_info = buffer.getvalue()
+    df_preview = df.head().to_string()
+
+    system_message = load_prompt(
+        "_system_data_analysis_prompt",
+        df_info = df_info,
+        df_preview = df_preview
+    )
+
+    prompt_template = ChatPromptTemplate.from_messages([
+        ("system", system_message),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ])
+
+    agent = create_tool_calling_agent(data_analyst_llm, tools, prompt_template)
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=tools, 
+        verbose=False, 
+        handle_parsing_errors=True,
+        robust=True
+    )
+    
+    # Execute the agent with the provided analysis prompt
+    agent_response = _invoke_agent(agent_executor, {"input": analysis_prompt})
+    data_insights = agent_response["output"]
+
+    return data_insights
+
+# First node: Analyze past campaigns
 def analyze_past_campaigns(state: GraphState) -> dict:
     """Analyze past campaign data and return data-driven insights only.
 
@@ -126,24 +221,11 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     dataset and returning them in the state under `past_campaign_insights`.
     The actual strategy generation is handled by a separate node.
     """
-
-    print("Analyzing past campaign data...")
-    
+    logger.info("Analyzing past campaign data...")    
     campaign_input = state["campaign_input"]
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
-    def _invoke_agent(agent, prompt_input):
-        return agent.invoke(prompt_input)
     
     try:
         df = pd.read_csv("data/marketing_campaign_dataset.csv")
-        agent = create_pandas_dataframe_agent(
-            llm,
-            df,
-            verbose = True,
-            allow_dangerous_code = True,
-            max_iterations = 5
-        )
 
         # Load prompt template and format with variables
         data_analysis_prompt = load_prompt(
@@ -152,17 +234,48 @@ def analyze_past_campaigns(state: GraphState) -> dict:
             target_industry=campaign_input.target_industry
         )
         
-        # The agent expects a dictionary with an 'input' key.
-        agent_response = _invoke_agent(agent, {"input": data_analysis_prompt})
-        # The actual result is in the 'output' key of the response dictionary.
-        data_insights = agent_response["output"]
-
+        # Use the data analysis agent to extract insights
+        data_insights = data_analysis_agent(df, data_analysis_prompt)
+        
+    except FileNotFoundError:
+        logger.warning("marketing_campaign_dataset.csv not found.")
+        data_insights = "Historical data unavailable - dataset file not found."
+        
     except Exception as e:
-        print(f"Warning: Could not analyze data with agent. Error: {e}")
-        data_insights = "Data analysis unavailable due to an error."
+        logger.error(f"Could not analyze data with agent. Error: {e}")
+        import traceback
+        traceback.print_exc()
+        data_insights = f"Data analysis unavailable due to error: {str(e)[:200]}"
 
     # Return only the data insights to be consumed by the next node
     return {"past_campaign_insights": data_insights}
+
+
+# Search agent: conducts DuckDuckGo searches for market research
+def search_agent(queries: list) -> str:
+    """Execute search queries and compile results into a single text block.
+"""
+    
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    def _search(query: str) -> str:
+        return search_tool.invoke(query)
+    
+    search_tool = DuckDuckGoSearchRun()
+    all_results = []
+    
+    logger.info("Executing search queries...")
+    for query in queries:
+        try:
+            logger.info(f"  Running query: {query}")
+            results = _search(query)
+            all_results.append(f"--- RESULTS FOR QUERY: {query} ---\n{results}")
+        except Exception as e:
+            logger.warning(f"Query failed: '{query}'. Error: {e}")
+            all_results.append(f"--- SEARCH FAILED FOR QUERY: {query} ---")
+    
+    search_results_text = "\n\n".join(all_results)
+    return search_results_text
+
 
 # Second node: Conduct market research using search queries and synthesize results into market trends
 def conduct_market_research(state: GraphState) -> dict:
@@ -171,12 +284,8 @@ def conduct_market_research(state: GraphState) -> dict:
     and synthesizing the results into a coherent summary of market trends.
     """
 
-    print("Conducting robust market research...")
+    logger.info("Conducting robust market research...")
     campaign_input = state["campaign_input"]
-    
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
-    def _search(query: str) -> str: 
-        return search.invoke(query)
     
     # 1. Generate multiple, targeted search queries
     queries = [
@@ -186,23 +295,11 @@ def conduct_market_research(state: GraphState) -> dict:
         f"emerging marketing channels and technologies for {campaign_input.target_industry}"
     ]
     
-    # 2. Execute searches in parallel
-    search = DuckDuckGoSearchRun()
-    all_results = []
-    print("Executing search queries...")
-    for query in queries:
-        try:
-            print(f"  - Running query: {query}")
-            results = _search(query)
-            all_results.append(f"--- RESULTS FOR QUERY: {query} ---\n{results}")
-        except Exception as e:
-            print(f"Warning: Query failed: '{query}'. Error: {e}")
-            all_results.append(f"--- SEARCH FAILED FOR QUERY: {query} ---")
-
-    # 3. Compile the results with an LLM
-    print("Synthesizing market trends from search results...")
+    # 2. Execute searches using the search agent
+    search_results_text = search_agent(queries)
     
-    search_results_text = "\n\n".join(all_results)
+    # 3. Compile the results with an LLM
+    logger.info("Synthesizing market trends from search results...")
     
     # Load prompt template and format with variables
     market_research_prompt = load_prompt(
@@ -225,9 +322,9 @@ def conduct_market_research(state: GraphState) -> dict:
         else:
             compiled_trends = str(content)
             
-        print(f"Successfully synthesized market trends.")
+        logger.info(f"Successfully synthesized market trends.")
     except Exception as e:
-        print(f"Warning: Market research synthesis failed: {e}")
+        logger.error(f"Market research synthesis failed: {e}")
         # As a fallback, return the raw (but truncated) search results
         compiled_trends = "Market trend synthesis failed. Raw data follows:\n\n" + search_results_text[:2000]
 
@@ -265,7 +362,7 @@ def generate_strategy(state: GraphState) -> dict:
     try:
         strategy = _generate_strategy(strategy_prompt)
     except Exception as e:
-        print(f"Warning: structured LLM failed: {e}. Falling back to text LLM.")
+        logger.error(f"Structured LLM failed: {e}. Falling back to text LLM.")
         # fallback to the plain LLM interface if necessary
         strategy_text = llm.invoke(strategy_prompt)
         # best-effort parse: put the whole text into target_audience for visibility
@@ -312,7 +409,7 @@ def recommend_channels(state: GraphState) -> dict:
         recommendation = _recommend_channels(channel_prompt)
         return {"channel_recommendation": recommendation}
     except Exception as e:
-        print(f"Warning: Channel recommendation failed: {e}")
+        logger.error(f"Channel recommendation failed: {e}")
         return {"channel_recommendation": ChannelRecommendation(
             primary_channels="Unable to generate recommendations",
             channel_rationale=str(e),
@@ -350,7 +447,7 @@ def optimize_budget(state: GraphState) -> dict:
         allocation = _optimize_budget(budget_prompt)
         return {"budget_allocation": allocation}
     except Exception as e:
-        print(f"Warning: Budget optimization failed: {e}")
+        logger.error(f"Budget optimization failed: {e}")
         return {"budget_allocation": BudgetAllocation(
             channel_breakdown="Unable to generate breakdown",
             timeline_phases="N/A",
@@ -532,7 +629,7 @@ def format_markdown_report(state: GraphState) -> dict:
 
         return {"formatted_markdown": formatted_content}
     except Exception as e:
-        print(f"Warning: Markdown formatting failed: {e}")
+        logger.error(f"Markdown formatting failed: {e}")
         # Fallback to basic structure
         return {"formatted_markdown": generate_fallback_report(state)}
 
@@ -546,14 +643,12 @@ def human_approval_step(state: GraphState) -> dict:
     formatted_md = state.get('formatted_markdown', '')
 
     # For UI so that humans can see the whole report and ask further questions or chose to redo analysis
-    
-    print("\n" + "="*70)
-    print("FORMATTED MARKDOWN REPORT")
-    print("="*70)
-    print(formatted_md[:2000])  # Preview first 2000 chars
-    print("\n... (partial report shown above) ...\n")
-    
-    print("="*70)
+    logger.info("=" * 70)
+    logger.info("FORMATTED MARKDOWN REPORT")
+    logger.info("=" * 70)
+    logger.info(formatted_md[:2000])  # Preview first 2000 chars
+    logger.info("\n... (partial report shown above) ...\n")
+    logger.info("=" * 70)
     
     approval = 'y'
     # approval = input("\n✓ Save the report to markdown? (yes/no): ").strip().lower()
@@ -570,7 +665,7 @@ def save_approved_markdown(state: GraphState) -> dict:
     """
     
     if not state.get('human_approval', False):
-        print("\nReport NOT saved. No confirmation received.")
+        logger.info("Report NOT saved. No confirmation received.")
         return {"formatted_markdown": ""}  # Clear from state
     
     formatted_md = state.get('formatted_markdown', '')
@@ -580,50 +675,75 @@ def save_approved_markdown(state: GraphState) -> dict:
     try:
         with open(filename, 'w') as f:
             f.write(formatted_md)
-        print(f"\nReport successfully saved to: {filename}")
+        logger.info(f"Report successfully saved to: {filename}")
         return {"formatted_markdown": filename}
     except Exception as e:
-        print(f"Error saving file: {e}")
+        logger.error(f"Error saving file: {e}")
         return {"formatted_markdown": ""}
 
-# Build the graph
-builder = StateGraph(GraphState)
-builder.add_node("collect_campaign_input", collect_campaign_input)
-builder.add_node("analyze_past_campaigns", analyze_past_campaigns)
-builder.add_node("conduct_market_research", conduct_market_research)
-builder.add_node("generate_strategy", generate_strategy)
-builder.add_node("recommend_channels", recommend_channels)
-builder.add_node("optimize_budget", optimize_budget)
-builder.add_node("assess_risks", assess_risks)
-builder.add_node("format_markdown_report", format_markdown_report)
-builder.add_node("human_approval_step", human_approval_step)
-builder.add_node("save_approved_markdown", save_approved_markdown)
 
-builder.add_edge(START, "collect_campaign_input")
+def build_graph(include_human_approval: bool = True) -> StateGraph:
+    """Build the LangGraph pipeline, optionally skipping human approval steps."""
+    builder = StateGraph(GraphState)
+    builder.add_node("collect_campaign_input", collect_campaign_input)
+    builder.add_node("analyze_past_campaigns", analyze_past_campaigns)
+    builder.add_node("conduct_market_research", conduct_market_research)
+    builder.add_node("generate_strategy", generate_strategy)
+    builder.add_node("recommend_channels", recommend_channels)
+    builder.add_node("optimize_budget", optimize_budget)
+    builder.add_node("assess_risks", assess_risks)
+    builder.add_node("format_markdown_report", format_markdown_report)
 
-# Parallel execution: both nodes only depend on campaign_input
-builder.add_edge("collect_campaign_input", "analyze_past_campaigns")
-builder.add_edge("collect_campaign_input", "conduct_market_research")
+    if include_human_approval:
+        builder.add_node("human_approval_step", human_approval_step)
+        builder.add_node("save_approved_markdown", save_approved_markdown)
 
-# generate_strategy waits for both parallel nodes to complete
-builder.add_edge("analyze_past_campaigns", "generate_strategy")
-builder.add_edge("conduct_market_research", "generate_strategy")
+    builder.add_edge(START, "collect_campaign_input")
 
-builder.add_edge("generate_strategy", "recommend_channels")
-builder.add_edge("recommend_channels", "optimize_budget")
-builder.add_edge("optimize_budget", "assess_risks")
-builder.add_edge("assess_risks", "format_markdown_report")
-builder.add_edge("format_markdown_report", "human_approval_step")
-builder.add_edge("human_approval_step", "save_approved_markdown")
-builder.add_edge("save_approved_markdown", END)
+    # Parallel execution: both nodes only depend on campaign_input
+    builder.add_edge("collect_campaign_input", "analyze_past_campaigns")
+    builder.add_edge("collect_campaign_input", "conduct_market_research")
 
-app = builder.compile()
+    # generate_strategy waits for both parallel nodes to complete
+    builder.add_edge("analyze_past_campaigns", "generate_strategy")
+    builder.add_edge("conduct_market_research", "generate_strategy")
 
-# Prepare initial state with both input and placeholder values for output fields
-initial_state = {
-    "campaign_input": None
-}
+    builder.add_edge("generate_strategy", "recommend_channels")
+    builder.add_edge("recommend_channels", "optimize_budget")
+    builder.add_edge("optimize_budget", "assess_risks")
+    builder.add_edge("assess_risks", "format_markdown_report")
 
-# Run graph with user-provided campaign input
-print("\nAnalyzing campaign requirements...")
-result = app.invoke(initial_state)
+    if include_human_approval:
+        builder.add_edge("format_markdown_report", "human_approval_step")
+        builder.add_edge("human_approval_step", "save_approved_markdown")
+        builder.add_edge("save_approved_markdown", END)
+    else:
+        builder.add_edge("format_markdown_report", END)
+
+    return builder
+
+
+def run_campaign(campaign_input: CampaignInput, include_human_approval: bool = False) -> dict:
+    """Run the graph with a pre-supplied campaign input and return the final state."""
+    app = build_graph(include_human_approval=include_human_approval).compile()
+    initial_state = {"campaign_input": campaign_input}
+    return app.invoke(initial_state)
+
+
+def main() -> None:
+    logger.info("Starting LangGraph execution...")
+    app = build_graph(include_human_approval=True).compile()
+
+    # Prepare initial state with both input and placeholder values for output fields
+    initial_state = {
+        "campaign_input": None
+    }
+
+    # Run graph with user-provided campaign input
+    logger.info("Analyzing campaign requirements...")
+    app.invoke(initial_state)
+    logger.info("Campaign analysis complete.")
+
+
+if __name__ == "__main__":
+    main()
