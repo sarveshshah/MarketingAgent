@@ -57,6 +57,7 @@ Produce a single, elegant markdown report. Your output must be **ONLY the markdo
     *   Use bold (`**`) and italics (`*`) sparingly to emphasize key metrics and takeaways, but NOT inside paragraph text. Reserve bold/italics for isolated bullet points, table cells, and list items.
     *   Use bullet points (`*`) for lists.
     *   Use tables for structured data to improve readability.
+    *   Make sure you use escape characters when priting '$' signs for e.g. '\$' instead of just '$'. 
     *   **CRITICAL:** Never interleave markdown formatting (bold, italics) within flowing paragraph text. Keep paragraph text clean and unformatted unless it's a single key metric highlight (e.g., "Expected ROI: 5.0–5.1").
 
 ### Final Instruction:

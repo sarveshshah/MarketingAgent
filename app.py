@@ -13,53 +13,9 @@ st.set_page_config(
 )
 
 # Custom CSS for a cleaner look
-st.markdown("""
-<style>
-    :root {
-        --accent: #ff6b35;
-        --ink: #1d1d1f;
-        --muted: #6b7280;
-        --panel: #f8fafc;
-        --stroke: #e5e7eb;
-    }
-    .stButton>button {
-        width: 100%;
-        background-color: var(--accent);
-        color: white;
-        border: 1px solid var(--accent);
-    }
-    .hero {
-        padding: 18px 20px;
-        background: linear-gradient(135deg, #fff3e9, #fffaf2);
-        border: 1px solid var(--stroke);
-        border-radius: 14px;
-    }
-    .hero h1 {
-        color: var(--ink);
-        margin-bottom: 6px;
-    }
-    .hero p {
-        color: var(--muted);
-        margin: 0;
-    }
-    .card {
-        background-color: var(--panel);
-        border: 1px solid var(--stroke);
-        padding: 14px 16px;
-        border-radius: 12px;
-    }
-    .pill {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 999px;
-        background: #fff1e6;
-        color: #7a2e0e;
-        border: 1px solid #ffd9c2;
-        font-size: 12px;
-        margin-right: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+styles_path = Path(__file__).parent / "assets" / "styles.css"
+styles = styles_path.read_text(encoding="utf-8")
+st.markdown(f"<style>{styles}</style>", unsafe_allow_html=True)
 
 # Header
 st.markdown(
@@ -77,7 +33,104 @@ st.markdown(
 
 if "history" not in st.session_state:
     st.session_state.history = []
+if "campaign_type" not in st.session_state:
+    st.session_state.campaign_type = ""
+if "target_industry" not in st.session_state:
+    st.session_state.target_industry = ""
+if "budget_amount" not in st.session_state:
+    st.session_state.budget_amount = 0
+if "budget_currency" not in st.session_state:
+    st.session_state.budget_currency = "$"
+if "timeline" not in st.session_state:
+    st.session_state.timeline = ""
+if "goals" not in st.session_state:
+    st.session_state.goals = ""
 
+def apply_selected_preset(preset_options):
+    choice = st.session_state.get("preset_choice", "Custom")
+    if choice != "Custom":
+        for key, value in preset_options[choice].items():
+            st.session_state[key] = value
+
+# Function to render the stepper component
+def render_stepper(steps, current_key, completed_keys):
+    items = []
+    for index, (key, label) in enumerate(steps, start=1):
+        if key == current_key:
+            state = "active"
+        elif key in completed_keys:
+            state = "complete"
+        else:
+            state = "pending"
+        items.append(
+            "<div class=\"step {state}\">"
+            "<div class=\"step-circle\">{index}</div>"
+            "<div class=\"step-label\">{label}</div>"
+            "</div>".format(state=state, index=index, label=label)
+        )
+    return "<div class=\"stepper\">{items}</div>".format(items="".join(items))
+
+# Utility function to extract and format text from various output structures
+def extract_formatted_text(value):
+    def format_scalar(item):
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, (int, float, bool)):
+            return str(item)
+        if isinstance(item, (list, tuple)):
+            parts = [str(part).strip() for part in item if str(part).strip()]
+            return ", ".join(parts) if parts else None
+        return None
+
+    def format_mapping(mapping):
+        lines = []
+        for key, item in mapping.items():
+            formatted = format_scalar(item)
+            if not formatted:
+                continue
+            label = str(key).replace("_", " ").title()
+            lines.append(f"- **{label}**: {formatted}")
+        return "\n".join(lines) if lines else None
+
+    if hasattr(value, "model_dump"):
+        return format_mapping(value.model_dump())
+    if hasattr(value, "dict") and callable(value.dict):
+        return format_mapping(value.dict())
+    if isinstance(value, str):
+        text = value.strip()
+        return text if text else None
+    if isinstance(value, dict):
+        for key in (
+            "formatted_markdown",
+            "markdown",
+            "content",
+            "text",
+            "summary",
+            "output",
+            "report",
+            "analysis",
+            "insights",
+            "recommendation",
+            "allocation",
+            "risks",
+            "strategy",
+        ):
+            text = value.get(key)
+            if isinstance(text, str) and text.strip():
+                return text
+        if len(value) == 1:
+            only_value = next(iter(value.values()))
+            formatted = format_scalar(only_value)
+            if formatted:
+                return formatted
+        return format_mapping(value)
+    if isinstance(value, (list, tuple)):
+        parts = [item.strip() for item in value if isinstance(item, str) and item.strip()]
+        if parts:
+            return "\n\n".join(parts)
+    return None
+
+# Add some preset options for quick testing and demonstrations
 preset_options = {
     "Custom": {},
     "Product Launch": {
@@ -109,10 +162,34 @@ preset_options = {
 # Layout: Sidebar for Inputs, Main Area for Results
 with st.sidebar:
     st.header("Campaign Details")
-    preset_choice = st.selectbox("Quick preset", list(preset_options.keys()))
-    if st.button("Apply preset") and preset_choice != "Custom":
-        for key, value in preset_options[preset_choice].items():
-            st.session_state[key] = value
+    preset_choice = st.selectbox(
+        "Quick preset",
+        list(preset_options.keys()),
+        key="preset_choice",
+        on_change=apply_selected_preset,
+        kwargs={"preset_options": preset_options}
+    )
+
+    if preset_choice != "Custom":
+        st.markdown(
+            """
+            <div class="card">
+                <strong>Preset summary</strong><br/>
+                Type: {campaign_type}<br/>
+                Industry: {industry}<br/>
+                Budget: {budget}<br/>
+                Timeline: {timeline}<br/>
+                Goals: {goals}
+            </div>
+            """.format(
+                campaign_type=st.session_state.get("campaign_type", ""),
+                industry=st.session_state.get("target_industry", ""),
+                budget=f"{st.session_state.get('budget_currency', '$')}{st.session_state.get('budget_amount', 0):,}",
+                timeline=st.session_state.get("timeline", ""),
+                goals=st.session_state.get("goals", "")
+            ),
+            unsafe_allow_html=True
+        )
 
     st.caption("Fields marked with * are required.")
 
@@ -120,15 +197,15 @@ with st.sidebar:
         c_type = st.text_input(
             "Campaign Type *",
             placeholder="e.g., Product Launch, Brand Awareness",
-            value=st.session_state.get("campaign_type", ""),
             key="campaign_type"
         )
+        c_type_error = st.empty()
         industry = st.text_input(
             "Target Industry *",
             placeholder="e.g., FinTech, Retail, Healthcare",
-            value=st.session_state.get("target_industry", ""),
             key="target_industry"
         )
+        industry_error = st.empty()
 
         col_budget, col_currency = st.columns([2, 1])
         with col_budget:
@@ -136,34 +213,40 @@ with st.sidebar:
                 "Budget Amount *",
                 min_value=0,
                 step=1000,
-                value=int(st.session_state.get("budget_amount", 0)),
                 key="budget_amount"
             )
+            st.caption("Typical ranges: \$25k-\$250k for mid-size campaigns.")
+            budget_error = st.empty()
         with col_currency:
             budget_currency = st.selectbox(
                 "Currency",
                 options=["$", "€", "£", "₹"],
-                index=["$", "€", "£", "₹"].index(st.session_state.get("budget_currency", "$")),
                 key="budget_currency"
             )
 
         timeline = st.text_input(
             "Timeline",
             placeholder="e.g., Q3 2026, 6 months",
-            value=st.session_state.get("timeline", ""),
             key="timeline"
         )
         goals = st.text_area(
             "Key Goals",
             placeholder="e.g., Increase leads by 20%, 1M impressions",
-            value=st.session_state.get("goals", ""),
             key="goals"
         )
 
-        show_agent_outputs = st.checkbox("Show agent outputs", value=False)
+        show_agent_outputs = st.checkbox("Show agent outputs", value=True)
         save_report = st.checkbox("Save report to outputs/", value=True)
 
         submitted = st.form_submit_button("Generate Strategy")
+
+    if submitted:
+        if not c_type:
+            c_type_error.caption("Required field.")
+        if not industry:
+            industry_error.caption("Required field.")
+        if not budget_amount:
+            budget_error.caption("Required field.")
 
 if submitted:
     if not (c_type and industry and budget_amount):
@@ -187,10 +270,61 @@ if submitted:
         st.subheader("Agent Workflow")
 
         # Container for the "Thinking Process"
-        with st.status("🤖 Agents are working...", expanded=True) as status:
+        with st.status("Agents are working...", expanded=True) as status:
             final_markdown = ""
             node_results = {}
             progress = st.progress(0)
+            steps = [
+                ("analyze_past_campaigns", "Past Campaigns"),
+                ("conduct_market_research", "Market Research"),
+                ("generate_strategy", "Optimal Strategy"),
+                ("recommend_channels", "Top Channels"),
+                ("optimize_budget", "Budget Allocation"),
+                ("assess_risks", "Risks Considerations"),
+                ("format_markdown_report", "Final Report"),
+            ]
+            st.markdown("**Progress**")
+            stepper_placeholder = st.empty()
+            status_line = st.empty()
+            completed_steps = set()
+            current_step = None
+            stepper_placeholder.markdown(
+                render_stepper(steps, current_step, completed_steps),
+                unsafe_allow_html=True
+            )
+            status_line.markdown(
+                "<div class=\"status-line\">Starting workflow...</div>",
+                unsafe_allow_html=True
+            )
+
+            step_updates = {
+                "analyze_past_campaigns": (15, "Analyzing past campaigns data..."),
+                "conduct_market_research": (35, "Searching the internet for latest market trends..."),
+                "generate_strategy": (55, "Synthesizing strategy..."),
+                "recommend_channels": (70, "Selecting channels..."),
+                "optimize_budget": (85, "Allocating budget..."),
+                "assess_risks": (92, "Assessing risks..."),
+                "format_markdown_report": (100, "Formatting report..."),
+            }
+
+            def apply_step_update(node_key):
+                if node_key not in step_updates:
+                    return
+                progress_value, message = step_updates[node_key]
+                progress.progress(progress_value)
+                status_line.markdown(
+                    f"<div class=\"status-line\">{message}</div>",
+                    unsafe_allow_html=True
+                )
+                stepper_placeholder.markdown(
+                    render_stepper(steps, node_key, completed_steps),
+                    unsafe_allow_html=True
+                )
+                completed_steps.add(node_key)
+                stepper_placeholder.markdown(
+                    render_stepper(steps, node_key, completed_steps),
+                    unsafe_allow_html=True
+                )
 
             # Stream the graph execution
             try:
@@ -203,32 +337,20 @@ if submitted:
                             node_results.update(node_output)
 
                         # Update status based on the node
-                        if node_name == "analyze_past_campaigns":
-                            st.write("📊 Analyzing historical campaign data...")
-                            progress.progress(15)
-                        elif node_name == "conduct_market_research":
-                            st.write("🌍 Conducting market research & trend analysis...")
-                            progress.progress(35)
-                        elif node_name == "generate_strategy":
-                            st.write("🧠 Synthesizing high-level strategy...")
-                            progress.progress(55)
-                        elif node_name == "recommend_channels":
-                            st.write("📢 Identifying optimal channels...")
-                            progress.progress(70)
-                        elif node_name == "optimize_budget":
-                            st.write("💰 Allocating budget resources...")
-                            progress.progress(85)
-                        elif node_name == "assess_risks":
-                            st.write("🛡️ Assessing potential risks...")
-                            progress.progress(92)
-                        elif node_name == "format_markdown_report":
-                            st.write("📝 Formatting final report...")
+                        if node_name == "format_markdown_report":
                             # Capture the final markdown from this node
                             if isinstance(node_output, dict) and "formatted_markdown" in node_output:
                                 final_markdown = node_output["formatted_markdown"]
-                            progress.progress(100)
+
+                        if node_name in step_updates:
+                            current_step = node_name
+                            apply_step_update(node_name)
 
                 status.update(label="Strategy Generated Successfully!", state="complete", expanded=False)
+                status_line.markdown(
+                    "<div class=\"status-line\">Strategy generated successfully.</div>",
+                    unsafe_allow_html=True
+                )
 
                 if not final_markdown:
                     raise ValueError("No final markdown returned from the graph.")
@@ -242,13 +364,13 @@ if submitted:
 
                 # Display the Result
                 st.divider()
-                report_tab, inputs_tab, outputs_tab = st.tabs(["📄 Report", "📥 Inputs", "🧩 Agent Outputs"])
+                report_tab, inputs_tab, outputs_tab = st.tabs(["Report", "Inputs", "Agent Outputs"])
 
                 with report_tab:
                     st.markdown(final_markdown)
 
                     st.download_button(
-                        label="📥 Download Report as Markdown",
+                        label="Download Report as Markdown",
                         data=final_markdown,
                         file_name=f"marketing_strategy_{industry.replace(' ', '_')}.md",
                         mime="text/markdown"
@@ -291,10 +413,29 @@ if submitted:
                             ("Risk Assessment", "risk_assessment"),
                         ]:
                             if key in node_results and node_results[key]:
-                                st.markdown(f"**{label}**")
-                                st.write(node_results[key])
+                                formatted_text = extract_formatted_text(node_results[key])
+                                if formatted_text:
+                                    st.markdown(f"**{label}**")
+                                    st.markdown(formatted_text)
+                                else:
+                                    st.markdown(f"**{label}**")
+                                    st.caption("No formatted text available for this section.")
                     else:
-                        st.info("Enable 'Show agent outputs' in the form to view intermediate results.")
+                        available_sections = sum(
+                            1 for key in [
+                                "past_campaign_insights",
+                                "market_trends",
+                                "strategy",
+                                "channel_recommendation",
+                                "budget_allocation",
+                                "risk_assessment",
+                            ]
+                            if node_results.get(key)
+                        )
+                        st.info(
+                            f"Enable 'Show agent outputs' in the form to view intermediate results. "
+                            f"({available_sections} sections ready)"
+                        )
 
             except Exception as e:
                 status.update(label="Error occurred", state="error")
