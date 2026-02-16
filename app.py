@@ -274,15 +274,22 @@ if submitted:
             final_markdown = ""
             node_results = {}
             progress = st.progress(0)
-            steps = [
-                ("analyze_past_campaigns", "Past Campaigns"),
-                ("conduct_market_research", "Market Research"),
-                ("generate_strategy", "Optimal Strategy"),
-                ("recommend_channels", "Top Channels"),
-                ("optimize_budget", "Budget Allocation"),
-                ("assess_risks", "Risks Considerations"),
-                ("format_markdown_report", "Final Report"),
+            
+            # Unified step configuration
+            step_config = [
+                {"key": "analyze_past_campaigns", "label": "Past Campaigns", "progress": 15, "message": "Analyzing past campaigns data..."},
+                {"key": "conduct_market_research", "label": "Market Research", "progress": 35, "message": "Searching the internet for latest market trends..."},
+                {"key": "generate_strategy", "label": "Optimal Strategy", "progress": 55, "message": "Synthesizing strategy..."},
+                {"key": "recommend_channels", "label": "Top Channels", "progress": 70, "message": "Selecting channels..."},
+                {"key": "optimize_budget", "label": "Budget Allocation", "progress": 85, "message": "Allocating budget..."},
+                {"key": "assess_risks", "label": "Risks Considerations", "progress": 92, "message": "Assessing risks..."},
+                {"key": "format_markdown_report", "label": "Final Report", "progress": 100, "message": "Formatting report..."},
             ]
+            
+            # Derive steps list for stepper rendering
+            steps = [(s["key"], s["label"]) for s in step_config]
+            step_updates = {s["key"]: (s["progress"], s["message"]) for s in step_config}
+            
             st.markdown("**Progress**")
             stepper_placeholder = st.empty()
             status_line = st.empty()
@@ -297,16 +304,6 @@ if submitted:
                 unsafe_allow_html=True
             )
 
-            step_updates = {
-                "analyze_past_campaigns": (15, "Analyzing past campaigns data..."),
-                "conduct_market_research": (35, "Searching the internet for latest market trends..."),
-                "generate_strategy": (55, "Synthesizing strategy..."),
-                "recommend_channels": (70, "Selecting channels..."),
-                "optimize_budget": (85, "Allocating budget..."),
-                "assess_risks": (92, "Assessing risks..."),
-                "format_markdown_report": (100, "Formatting report..."),
-            }
-
             def apply_step_update(node_key):
                 if node_key not in step_updates:
                     return
@@ -314,10 +311,6 @@ if submitted:
                 progress.progress(progress_value)
                 status_line.markdown(
                     f"<div class=\"status-line\">{message}</div>",
-                    unsafe_allow_html=True
-                )
-                stepper_placeholder.markdown(
-                    render_stepper(steps, node_key, completed_steps),
                     unsafe_allow_html=True
                 )
                 completed_steps.add(node_key)
