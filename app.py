@@ -31,6 +31,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# Initialize session state for inputs and history
 if "history" not in st.session_state:
     st.session_state.history = []
 if "campaign_type" not in st.session_state:
@@ -275,7 +276,7 @@ if submitted:
             node_results = {}
             progress = st.progress(0)
             
-            # Unified step configuration
+            # Unified step configuration - Show's thinking process in the UI
             step_config = [
                 {"key": "analyze_past_campaigns", "label": "Past Campaigns", "progress": 15, "message": "Analyzing past campaigns data..."},
                 {"key": "conduct_market_research", "label": "Market Research", "progress": 35, "message": "Searching the internet for latest market trends..."},

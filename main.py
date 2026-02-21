@@ -1,3 +1,4 @@
+# imports
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
@@ -19,6 +20,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+# Load API keys from .env file
 load_dotenv()
 
 # Set up logging to file and console
@@ -56,17 +58,18 @@ logging.getLogger("langchain").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# LLM configurations
+# LLM configurations - you can use same model for both nodes or different ones depending on the task requirements
+# I found that Gemini was able to produce stronger data insights while ChatGPT was better at writing the report
 data_analyst_llm = ChatGoogleGenerativeAI(
     model="gemini-3-pro-preview", 
     temperature=0, 
-    verbose=False
+    verbose=True
 )
 
 llm = ChatOpenAI(
     model="gpt-5.1", 
     temperature=0, 
-    verbose=False
+    verbose=True
 )
 
 # Helper function to load and format prompt templates from the prompts directory
@@ -84,6 +87,7 @@ def load_prompt(prompt_name: str, **kwargs: Any) -> str:
     with open(prompt_file, 'r', encoding='utf-8') as f:
         template = f.read()
     
+    # Using **kwargs to make the function flexible and auto handle any variables needed for formatting the prompt
     try:
         return template.format(**kwargs)
     except KeyError as e:
@@ -126,7 +130,6 @@ class RiskAssessment(BaseModel):
 
 # Campaign state - includes both input and analysis results 
 # This state will be passed through each node in the graph, allowing them to read and update the relevant fields as they perform their tasks.
-
 class GraphState(TypedDict):
     campaign_input: Optional[CampaignInput]
     past_campaign_insights: str
@@ -138,7 +141,6 @@ class GraphState(TypedDict):
     formatted_markdown: Optional[str]
     human_approval: Optional[bool]
 
-
 # Initial node: Collect campaign input from user
 def collect_campaign_input(state: GraphState) -> dict:
     """Collect marketing campaign information from user"""
@@ -147,24 +149,25 @@ def collect_campaign_input(state: GraphState) -> dict:
     if state.get("campaign_input"):
         return {}
 
-    # For easy testing purposes
-    campaign_input = {
-        "campaign_type": "New Phone Launch",
-        "target_industry": "High income earners",
-        "budget": "100000",
-        "timeline": "6 months",
-        "goals": "Maximum engagement"
-    }
-    
-    # print("\n=== Marketing Campaign Input ===\n")
 
+    # TEST INPUT 
     # campaign_input = {
-    #     "campaign_type": input("Campaign type (e.g., product launch, brand awareness, retention): ").strip(),
-    #     "target_industry": input("Target industry or market segment: ").strip(),
-    #     "budget": input("Budget allocated for campaign: ").strip(),
-    #     "timeline": input("Timeline for campaign (e.g., 3 months, Q1 2026): ").strip(),
-    #     "goals": input("Specific goals or KPIs (comma-separated): ").strip(),
+    #     "campaign_type": "New Phone Launch",
+    #     "target_industry": "High income earners",
+    #     "budget": "100000",
+    #     "timeline": "6 months",
+    #     "goals": "Maximum engagement"
     # }
+    
+    print("\n=== Marketing Campaign Input ===\n")
+
+    campaign_input = {
+        "campaign_type": input("Campaign type (e.g., product launch, brand awareness, retention): ").strip(),
+        "target_industry": input("Target industry or market segment: ").strip(),
+        "budget": input("Budget allocated for campaign: ").strip(),
+        "timeline": input("Timeline for campaign (e.g., 3 months, Q1 2026): ").strip(),
+        "goals": input("Specific goals or KPIs (comma-separated): ").strip(),
+    }
     
     return {"campaign_input": CampaignInput(**campaign_input)}
 
@@ -173,6 +176,8 @@ def collect_campaign_input(state: GraphState) -> dict:
 def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
     """Data analysis agent that uses a Python REPL tool to analyze the dataframe and extract insights."""
     
+    # Tenacity retry logic helps with the brittleness of the agent execution. 
+    # It will retry up to 3 times with exponential backoff if there are any errors during the agent invocation.
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
     def _invoke_agent(agent_executor, prompt_input):
         return agent_executor.invoke(prompt_input)
@@ -198,11 +203,13 @@ def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
         ("placeholder", "{agent_scratchpad}"),
     ])
 
+    # lanchain's Pandas agent is brittle and seems to be abanadoned, so we are building a custom agent using the Python REPL tool which is more robust and allows us to have better control over the prompt and error handling. 
+    # The agent will receive the analysis prompt, execute Python code to analyze the dataframe, and return the insights as text.
     agent = create_tool_calling_agent(data_analyst_llm, tools, prompt_template)
     agent_executor = AgentExecutor(
         agent=agent, 
         tools=tools, 
-        verbose=False, 
+        verbose=True, 
         handle_parsing_errors=True,
         robust=True
     )
@@ -225,6 +232,7 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     campaign_input = state["campaign_input"]
     
     try:
+        # Hard coded for the POC perscpective, can be enhanced with a database connections or providing user the ability to upload their own dataset in the UI
         df = pd.read_csv("data/marketing_campaign_dataset.csv")
 
         # Load prompt template and format with variables
@@ -253,8 +261,7 @@ def analyze_past_campaigns(state: GraphState) -> dict:
 
 # Search agent: conducts DuckDuckGo searches for market research
 def search_agent(queries: list) -> str:
-    """Execute search queries and compile results into a single text block.
-"""
+    """Execute search queries and compile results into a single text block."""
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
     def _search(query: str) -> str:
@@ -287,7 +294,7 @@ def conduct_market_research(state: GraphState) -> dict:
     logger.info("Conducting robust market research...")
     campaign_input = state["campaign_input"]
     
-    # 1. Generate multiple, targeted search queries
+    # 1. Generate multiple, targeted search queries <- You can create another agent that can dynamically generate more queries based on the campaign input
     queries = [
         f"latest marketing trends for {campaign_input.campaign_type} in {campaign_input.target_industry} industry {datetime.now().year}",
         f"consumer behavior trends and preferences in {campaign_input.target_industry} {datetime.now().year}",
@@ -508,6 +515,7 @@ def generate_fallback_report(state: GraphState) -> str:
     trends = state.get('market_trends', '')
     campaign_input = state['campaign_input']
     
+    # Hardcoded markdown as a fallback if agent fails
     markdown_content = f"""# Marketing Campaign Strategy Report
 
     **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -592,26 +600,26 @@ def format_markdown_report(state: GraphState) -> dict:
     # Load prompt template and format with variables
     formatting_prompt = load_prompt(
         "markdown_formatting_prompt",
-        campaign_type=campaign_input.campaign_type,
-        target_industry=campaign_input.target_industry,
-        budget=campaign_input.budget,
-        timeline=campaign_input.timeline,
-        goals=campaign_input.goals,
-        past_campaign_insights=state.get("past_campaign_insights", "N/A"),
-        market_trends=state.get("market_trends", "N/A"),
-        target_audience=strategy.target_audience if strategy else 'N/A',
-        campaign_channels=strategy.campaign_channels if strategy else 'N/A',
-        acquisition_cost_estimate=strategy.acquisition_cost_estimate if strategy else 'N/A',
-        expected_roi=strategy.expected_roi if strategy else 'N/A',
-        primary_channels=channels.primary_channels if channels else 'N/A',
-        channel_rationale=channels.channel_rationale if channels else 'N/A',
-        expected_reach=channels.expected_reach if channels else 'N/A',
-        channel_breakdown=budget.channel_breakdown if budget else 'N/A',
-        timeline_phases=budget.timeline_phases if budget else 'N/A',
-        contingency_plan=budget.contingency_plan if budget else 'N/A',
-        identified_risks=risks.identified_risks if risks else 'N/A',
-        mitigation_strategies=risks.mitigation_strategies if risks else 'N/A',
-        success_metrics=risks.success_metrics if risks else 'N/A'
+        campaign_type = campaign_input.campaign_type,
+        target_industry = campaign_input.target_industry,
+        budget = campaign_input.budget,
+        timeline = campaign_input.timeline,
+        goals = campaign_input.goals,
+        past_campaign_insights = state.get("past_campaign_insights", "N/A"),
+        market_trends = state.get("market_trends", "N/A"),
+        target_audience = strategy.target_audience if strategy else 'N/A',
+        campaign_channels = strategy.campaign_channels if strategy else 'N/A',
+        acquisition_cost_estimate = strategy.acquisition_cost_estimate if strategy else 'N/A',
+        expected_roi = strategy.expected_roi if strategy else 'N/A',
+        primary_channels = channels.primary_channels if channels else 'N/A',
+        channel_rationale = channels.channel_rationale if channels else 'N/A',
+        expected_reach = channels.expected_reach if channels else 'N/A',
+        channel_breakdown = budget.channel_breakdown if budget else 'N/A',
+        timeline_phases = budget.timeline_phases if budget else 'N/A',
+        contingency_plan = budget.contingency_plan if budget else 'N/A',
+        identified_risks = risks.identified_risks if risks else 'N/A',
+        mitigation_strategies = risks.mitigation_strategies if risks else 'N/A',
+        success_metrics = risks.success_metrics if risks else 'N/A'
     )
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -639,7 +647,7 @@ def human_approval_step(state: GraphState) -> dict:
     
     Displays the formatted markdown and waits for user confirmation.
     """
-
+    
     formatted_md = state.get('formatted_markdown', '')
 
     # For UI so that humans can see the whole report and ask further questions or chose to redo analysis
