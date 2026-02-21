@@ -2,6 +2,11 @@
 
 Agentic AI workflow for generating data-driven marketing campaign strategies.
 
+
+
+https://github.com/user-attachments/assets/950d7b91-2c7a-489b-837c-f2d7f2679f22
+
+
 ## Quick Start
 
 **Required before first run:** add `OPENAI_API_KEY` and `GOOGLE_API_KEY` to your `.env` file (see Setup section).
