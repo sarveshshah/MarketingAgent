@@ -25,9 +25,8 @@ prompt = load_prompt(
 )
 ```
 
-## Available Templates
+## Sample Prompt Inputs
 
-### Created
 - `data_analysis_prompt.txt` - For analyzing historical campaign data
   - Variables: `campaign_type`, `target_industry`
   
@@ -36,14 +35,6 @@ prompt = load_prompt(
   
 - `strategy_generation_prompt.txt` - For generating high-level campaign strategy
   - Variables: `data_insights`, `market_trends`, `campaign_type`, `target_industry`, `budget`, `timeline`, `goals`
-
-### To Create
-You can extract the remaining prompts from `main.py` following the same pattern:
-
-- `channel_recommendation_prompt.txt` - For recommend_channels()
-- `budget_optimization_prompt.txt` - For optimize_budget()
-- `risk_assessment_prompt.txt` - For assess_risks()
-- `markdown_formatting_prompt.txt` - For format_markdown_report()
 
 ## Template Syntax
 
