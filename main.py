@@ -1,17 +1,12 @@
 # imports
 """Main"""
 from datetime import datetime
-
 import io
-import traceback
-
 import json
 import re
-
 from functools import lru_cache
 from typing import Annotated, Any, Optional
 import logging
-
 from pathlib import Path
 
 import pandas as pd
@@ -29,13 +24,17 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
-
-from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Load API keys from .env file — must happen before Settings is instantiated
+from typing_extensions import TypedDict
+
+# Load API keys from .env file immediately so they are available to third-party imports below
+from dotenv import load_dotenv
 load_dotenv()
+
+# Reusable retry decorators
+standard_retry = retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+fast_retry = retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
 
 # Set up logging to file and console
 logs_dir = Path("logs")
@@ -85,9 +84,9 @@ class Settings(BaseSettings):
     # Retry / resilience
     max_retries: int = 2
 
-    # File paths
-    data_path: Path = Path("data/marketing_campaign_dataset.csv")
-    outputs_dir: Path = Path("outputs")
+    # File paths — anchored to main.py's directory so they work regardless of CWD
+    data_path: Path = Path(__file__).parent / "data" / "marketing_campaign_dataset.csv"
+    outputs_dir: Path = Path(__file__).parent / "outputs"
     llm_cache_path: str = ".langchain.db"
 
 
@@ -120,20 +119,37 @@ def _get_analyst_llm() -> ChatGoogleGenerativeAI:
         verbose=True
     )
 
+
+@lru_cache(maxsize=1)
+def _get_search_llm() -> Any:
+    """Return the cached Gemini Search LLM (with Google Search tool bound).
+    Returns None if initialization fails (e.g. missing API key).
+    """
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model=settings.gemini_model, temperature=0, verbose=True
+        )
+        return llm.bind_tools([{"google_search": {}}])
+    except Exception as e:
+        logger.warning(f"Gemini Google Search could not be initialized: {e}. Will use DuckDuckGo exclusively.")
+        return None
+
+@lru_cache(maxsize=32)
+def _read_template(prompt_name: str) -> str:
+    """Read a template file from disk. Cached to avoid I/O on every call."""
+    prompts_dir = Path(__file__).parent / "prompts"
+    prompt_file = prompts_dir / f"{prompt_name}.txt"
+    if not prompt_file.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+    with open(prompt_file, 'r', encoding='utf-8') as f:
+        return f.read()
+
 # Helper function to load and format prompt templates from the prompts directory
 def load_prompt(prompt_name: str, **kwargs: Any) -> str:
     """
     Load a prompt template from the prompts directory and format it with variables.
     """
-    # Assuming prompts are in a 'prompts' folder relative to main.py
-    prompts_dir = Path(__file__).parent / "prompts"
-    prompt_file = prompts_dir / f"{prompt_name}.txt"
-    
-    if not prompt_file.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
-    
-    with open(prompt_file, 'r', encoding='utf-8') as f:
-        template = f.read()
+    template = _read_template(prompt_name)
     
     # Using **kwargs to make the function flexible and auto handle any variables needed for formatting the prompt
     try:
@@ -182,9 +198,23 @@ class RiskAssessment(BaseModel):
     success_metrics: str = Field(description="Key performance indicators to track")
 
 
-def _keep_first_error(x: Optional[str], y: Optional[str]) -> Optional[str]:
-    """Reducer: keep the first non-None error across parallel node writes."""
-    return x if x is not None else y
+def _keep_first_error(current: Optional[str], incoming: Optional[str]) -> Optional[str]:
+    """Reducer for the `error` state field across parallel node writes.
+
+    Args:
+        current:  The error value already stored in state before this node ran.
+        incoming: The error value the node just returned.
+
+    Rules:
+      - `incoming=None` is an explicit reset (node succeeded) — always clears the error.
+      - `incoming="<node_name>"` sets the error.
+      - When two parallel nodes both write a non-None error, the first one wins.
+    """
+    # Explicit None reset always wins — the node succeeded or cleared the error
+    if incoming is None:
+        return None
+    # incoming is a real error string; keep it (current may be None or a prior error)
+    return incoming if current is None else current
 
 # Campaign state - includes both input and analysis results 
 # This state will be passed through each node in the graph, allowing them to read and update the relevant fields as they perform their tasks.
@@ -242,7 +272,7 @@ def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
     
     # Tenacity retry logic helps with the brittleness of the agent execution. 
     # It will retry up to 3 times with exponential backoff if there are any errors during the agent invocation.
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    @standard_retry
     def _invoke_agent(agent_executor, prompt_input):
         return agent_executor.invoke(prompt_input)
     
@@ -293,11 +323,12 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     """
     logger.info("Analyzing past campaign data...")    
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before analyze_past_campaigns"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before analyze_past_campaigns")
 
     try:
         # Hard coded for the POC perscpective, can be enhanced with a database connections or providing user the ability to upload their own dataset in the UI
-        df = pd.read_csv("data/marketing_campaign_dataset.csv")
+        df = pd.read_csv(settings.data_path)
 
         # Load prompt template and format with variables
         data_analysis_prompt = load_prompt(
@@ -314,8 +345,7 @@ def analyze_past_campaigns(state: GraphState) -> dict:
         data_insights = "Historical data unavailable - dataset file not found."
         
     except Exception as e:
-        logger.error(f"Could not analyze data with agent. Error: {e}")
-        traceback.print_exc()
+        logger.exception("Could not analyze data with agent.")
         data_insights = f"Data analysis unavailable due to error: {str(e)[:200]}"
 
     # Return only the data insights to be consumed by the next node
@@ -327,21 +357,12 @@ def search_agent(queries: list) -> str:
     """Execute search queries using Gemini Google Search (primary) or DuckDuckGo (fallback)."""
     
     # Initialize tools
-    try:
-        # Gemini's built-in search tool binding
-        gemini_search_llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-pro",
-            temperature=0,
-        )
-        gemini_search_llm = gemini_search_llm.bind_tools([{"google_search": {}}])
-        has_gemini_search = True
-    except Exception as e:
-        logger.warning(f"Gemini Google Search could not be initialized: {e}. Will use DuckDuckGo exclusively.")
-        has_gemini_search = False
+    gemini_search_llm = _get_search_llm()
+    has_gemini_search = gemini_search_llm is not None
         
     ddg_tool = DuckDuckGoSearchRun()
     
-    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
+    @fast_retry
     def _search_google(query: str) -> str:
         response = gemini_search_llm.invoke(f"Perform a comprehensive Google search and summarize the findings for: {query}")
         content = response.content
@@ -353,7 +374,7 @@ def search_agent(queries: list) -> str:
             ).strip()
         return str(content)
         
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
+    @standard_retry
     def _search_ddg(query: str) -> str:
         return ddg_tool.invoke(query)
     
@@ -362,7 +383,6 @@ def search_agent(queries: list) -> str:
     logger.info("Executing search queries...")
     for query in queries:
         logger.info(f"  Running query: {query}")
-        results = None
         
         # Try Gemini Google Search first if available
         if has_gemini_search:
@@ -394,7 +414,8 @@ def conduct_market_research(state: GraphState) -> dict:
 
     logger.info("Conducting robust market research...")
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before conduct_market_research"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before conduct_market_research")
     # 1. Dynamically generate targeted search queries using an LLM
     search_queries_prompt = load_prompt(
         "generate_search_queries_prompt",
@@ -406,7 +427,8 @@ def conduct_market_research(state: GraphState) -> dict:
         current_year=datetime.now().year
     )
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    # Single retry-wrapped LLM caller used for both query generation and trend synthesis
+    @standard_retry
     def _invoke_llm(prompt):
         return _get_llm().invoke(prompt)
 
@@ -449,10 +471,7 @@ def conduct_market_research(state: GraphState) -> dict:
         search_results = search_results_text,
     )
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def _invoke_llm(prompt):
-        return _get_llm().invoke(prompt)
-    
+
     try:
         response = _invoke_llm(market_research_prompt)
         content = response.content if hasattr(response, 'content') else response
@@ -501,7 +520,8 @@ def generate_strategy(state: GraphState) -> dict:
     retries_val = state.get("retries", 0)
     retries = retries_val if isinstance(retries_val, int) else 0
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before generate_strategy"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before generate_strategy")
     data_insights = state.get("past_campaign_insights", "")
     market_trends = state.get("market_trends", "")
 
@@ -524,7 +544,7 @@ def generate_strategy(state: GraphState) -> dict:
 
     structured_llm = _get_llm().with_structured_output(CampaignStrategy)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @standard_retry
     def _generate_strategy(prompt):
         return structured_llm.invoke(prompt)
 
@@ -543,7 +563,8 @@ def recommend_channels(state: GraphState) -> dict:
     strategy = state.get("strategy")
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before recommend_channels"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before recommend_channels")
 
     # Load prompt template and format with variables
     channel_prompt = load_prompt(
@@ -564,7 +585,7 @@ def recommend_channels(state: GraphState) -> dict:
 
     structured_llm = _get_llm().with_structured_output(ChannelRecommendation)
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @standard_retry
     def _recommend_channels(prompt):
         return structured_llm.invoke(prompt)
 
@@ -582,7 +603,8 @@ def optimize_budget(state: GraphState) -> dict:
     retries = retries_val if isinstance(retries_val, int) else 0
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before optimize_budget"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before optimize_budget")
 
     # Load prompt template and format with variables
     budget_prompt = load_prompt(
@@ -601,7 +623,7 @@ def optimize_budget(state: GraphState) -> dict:
 
     structured_llm = _get_llm().with_structured_output(BudgetAllocation)
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @standard_retry
     def _optimize_budget(prompt):
         return structured_llm.invoke(prompt)
 
@@ -619,7 +641,8 @@ def assess_risks(state: GraphState) -> dict:
     retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before assess_risks"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before assess_risks")
 
     # Load prompt template and format with variables
     risk_prompt = load_prompt(
@@ -640,7 +663,7 @@ def assess_risks(state: GraphState) -> dict:
 
     structured_llm = _get_llm().with_structured_output(RiskAssessment)
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @standard_retry
     def _assess_risks(prompt):
         return structured_llm.invoke(prompt)
 
@@ -663,7 +686,8 @@ def generate_fallback_report(state: GraphState) -> str:
     insights = state.get('past_campaign_insights', '')
     trends = state.get('market_trends', '')
     campaign_input = state['campaign_input']
-    assert campaign_input is not None, "campaign_input must be set before generate_fallback_report"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before generate_fallback_report")
 
     # Hardcoded markdown as a fallback if agent fails
     markdown_content = f"""# Marketing Campaign Strategy Report
@@ -746,7 +770,8 @@ def format_markdown_report(state: GraphState) -> dict:
     budget = state.get('budget_allocation')
     risks = state.get('risk_assessment')
     campaign_input = state["campaign_input"]
-    assert campaign_input is not None, "campaign_input must be set before format_markdown_report"
+    if campaign_input is None:
+        raise ValueError("campaign_input must be set before format_markdown_report")
 
     # Load prompt template and format with variables
     formatting_prompt = load_prompt(
@@ -773,7 +798,7 @@ def format_markdown_report(state: GraphState) -> dict:
         success_metrics = risks.success_metrics if risks else 'N/A'
     )
     
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    @standard_retry
     def _format_report(prompt):
         return _get_llm().invoke(prompt)
 
@@ -799,7 +824,8 @@ def human_approval_step(state: GraphState) -> dict:
     Displays the formatted markdown and waits for user confirmation.
     """
     formatted_md = state.get('formatted_markdown', '')
-    assert formatted_md is not None, "formatted_markdown must be set before human_approval_step"
+    if formatted_md is None:
+        raise ValueError("formatted_markdown must be set before human_approval_step")
 
     # For UI so that humans can see the whole report and ask further questions or chose to redo analysis
     logger.info("=" * 70)
@@ -829,7 +855,8 @@ def save_approved_markdown(state: GraphState) -> dict:
     
     formatted_md = state.get('formatted_markdown') or ""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"./outputs/campaign_strategy_{timestamp}.md"
+    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    filename = settings.outputs_dir / f"campaign_strategy_{timestamp}.md"
     
     try:
         with open(filename, 'w', encoding='utf-8') as f:
@@ -875,23 +902,18 @@ def build_graph(include_human_approval: bool = True) -> StateGraph:
         lambda state: "recommend_channels" if state.get("error") == "recommend_channels" else "optimize_budget"
     )
     
-    # Dynamic Fan-In: Wait for BOTH parallel paths (optimize_budget and assess_risks) to finish
-    def budget_router(state):
-        if state.get("error") == "optimize_budget":
-            return "optimize_budget"
-        if state.get("risk_assessment"):
-            return "format_markdown_report"
-        return "__end__"
+    builder.add_conditional_edges("optimize_budget",
+        lambda state: "optimize_budget" if state.get("error") == "optimize_budget" else "merge_parallel"
+    )
+    builder.add_conditional_edges("assess_risks",
+        lambda state: "assess_risks" if state.get("error") == "assess_risks" else "merge_parallel"
+    )
 
-    def risks_router(state):
-        if state.get("error") == "assess_risks":
-            return "assess_risks"
-        if state.get("budget_allocation"):
-            return "format_markdown_report"
-        return "__end__"
-
-    builder.add_conditional_edges("optimize_budget", budget_router)
-    builder.add_conditional_edges("assess_risks", risks_router)
+    # Explicit merge node: LangGraph holds here until BOTH parallel branches
+    # (optimize_budget and assess_risks) have delivered their results, then
+    # advances to format_markdown_report — no cross-branch state peeking needed.
+    builder.add_node("merge_parallel", lambda state: {})
+    builder.add_edge("merge_parallel", "format_markdown_report")
 
     if include_human_approval:
         builder.add_edge("format_markdown_report", "human_approval_step")
