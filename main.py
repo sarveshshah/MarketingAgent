@@ -8,6 +8,7 @@ import traceback
 import json
 import re
 
+from functools import lru_cache
 from typing import Annotated, Any, Optional
 import logging
 
@@ -31,7 +32,9 @@ from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
 from dotenv import load_dotenv
-# Load API keys from .env file
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load API keys from .env file — must happen before Settings is instantiated
 load_dotenv()
 
 # Set up logging to file and console
@@ -69,19 +72,53 @@ logging.getLogger("langchain").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# LLM configurations - you can use same model for both nodes or different ones depending on the task requirements
-# I found that Gemini was able to produce stronger data insights while ChatGPT was better at writing the report
-data_analyst_llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0,
-    verbose=True
-)
 
-llm = ChatOpenAI(
-    model="gpt-5.1", 
-    temperature=0, 
-    verbose=True
-)
+class Settings(BaseSettings):
+    """Centralised configuration — values are read from .env or environment variables."""
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # LLM model names
+    openai_model: str = "gpt-5.1"
+    gemini_model: str = "gemini-2.5-flash"          # used by search agent
+    gemini_analyst_model: str = "gemini-2.5-pro" # used by data analysis agent
+
+    # Retry / resilience
+    max_retries: int = 2
+
+    # File paths
+    data_path: Path = Path("data/marketing_campaign_dataset.csv")
+    outputs_dir: Path = Path("outputs")
+    llm_cache_path: str = ".langchain.db"
+
+
+settings = Settings()
+
+# Configure LLM response caching — must be set before any LLM client is instantiated
+# Uses a local SQLite DB to avoid burning API tokens on identical prompts during dev/testing
+set_llm_cache(SQLiteCache(database_path=settings.llm_cache_path))
+
+
+@lru_cache(maxsize=1)
+def _get_llm() -> ChatOpenAI:
+    """Return the cached primary LLM (strategy, channels, budget, risks, report).
+    Built lazily on first call so importing this module never creates real API clients.
+    Call `_get_llm.cache_clear()` in tests to swap in a mock.
+    """
+    return ChatOpenAI(
+        model=settings.openai_model, 
+        temperature=0, 
+        verbose=True
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_analyst_llm() -> ChatGoogleGenerativeAI:
+    """Return the cached Gemini LLM used by the data-analysis agent."""
+    return ChatGoogleGenerativeAI(
+        model=settings.gemini_analyst_model, 
+        temperature=0, 
+        verbose=True
+    )
 
 # Helper function to load and format prompt templates from the prompts directory
 def load_prompt(prompt_name: str, **kwargs: Any) -> str:
@@ -232,7 +269,7 @@ def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
 
     # lanchain's Pandas agent is brittle and seems to be abanadoned, so we are building a custom agent using the Python REPL tool which is more robust and allows us to have better control over the prompt and error handling. 
     # The agent will receive the analysis prompt, execute Python code to analyze the dataframe, and return the insights as text.
-    agent = create_tool_calling_agent(data_analyst_llm, tools, prompt_template)
+    agent = create_tool_calling_agent(_get_analyst_llm(), tools, prompt_template)
     agent_executor = AgentExecutor(
         agent=agent, 
         tools=tools, 
@@ -371,7 +408,7 @@ def conduct_market_research(state: GraphState) -> dict:
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _invoke_llm(prompt):
-        return llm.invoke(prompt)
+        return _get_llm().invoke(prompt)
 
     try:
         logger.info("Generating dynamic search queries...")
@@ -414,7 +451,7 @@ def conduct_market_research(state: GraphState) -> dict:
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _invoke_llm(prompt):
-        return llm.invoke(prompt)
+        return _get_llm().invoke(prompt)
     
     try:
         response = _invoke_llm(market_research_prompt)
@@ -433,25 +470,29 @@ def conduct_market_research(state: GraphState) -> dict:
 
     return {"market_trends": compiled_trends}
 
-MAX_RETRIES = 2
+MAX_RETRIES = settings.max_retries
 
-def _llm_fallback(node_name: str, prompt: str, model_cls: type, fallback_fields: dict) -> dict:
+def _llm_fallback(node_name: str, prompt: str, state_key: str, model_cls: type, fallback_fields: dict) -> dict:
     """Run the plain LLM (no structured output) as a last-resort fallback.
 
-    Tries to get a text response and stuffs the first field with the raw content.
-    Returns a state-patch dict with the output key reset and retries cleared.
+    Args:
+        node_name:      Human-readable name used in log messages.
+        prompt:         The already-formatted prompt string to send to the LLM.
+        state_key:      The GraphState field to write the result into (e.g. "strategy").
+        model_cls:      The Pydantic model class to instantiate (e.g. CampaignStrategy).
+        fallback_fields: N/A defaults for every field — first field is overwritten with
+                         the raw LLM text if the unstructured call succeeds.
     """
-    output_key = next(iter(fallback_fields))          # e.g. "strategy"
     first_field = list(model_cls.model_fields)[0]     # first field of the pydantic model
     logger.warning("Max retries reached for %s. Using text fallback.", node_name)
     try:
-        response = llm.invoke(prompt)
+        response = _get_llm().invoke(prompt)
         content = str(response.content if hasattr(response, "content") else response)
         fields = {**fallback_fields, first_field: content[:500] + " ... (text fallback)"}
-        return {output_key: model_cls(**fields), "error": None, "retries": 0}
+        return {state_key: model_cls(**fields), "error": None, "retries": 0}
     except Exception as e:
         logger.error("Fallback text LLM also failed for %s: %s", node_name, e)
-        return {output_key: model_cls(**fallback_fields), "error": None, "retries": 0}
+        return {state_key: model_cls(**fallback_fields), "error": None, "retries": 0}
 
 
 # Third node: Generate the high-level marketing strategy based on the data insights and market trends
@@ -477,11 +518,11 @@ def generate_strategy(state: GraphState) -> dict:
     )
     
     if retries >= MAX_RETRIES:
-        return _llm_fallback("generate_strategy", strategy_prompt, CampaignStrategy,
+        return _llm_fallback("generate_strategy", strategy_prompt, "strategy", CampaignStrategy,
                              {"target_audience": "N/A", "campaign_channels": "N/A",
                               "acquisition_cost_estimate": "N/A", "expected_roi": "N/A"})
 
-    structured_llm = llm.with_structured_output(CampaignStrategy)
+    structured_llm = _get_llm().with_structured_output(CampaignStrategy)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _generate_strategy(prompt):
@@ -517,11 +558,11 @@ def recommend_channels(state: GraphState) -> dict:
     )
     
     if retries >= MAX_RETRIES:
-        return _llm_fallback("recommend_channels", channel_prompt, ChannelRecommendation,
+        return _llm_fallback("recommend_channels", channel_prompt, "channel_recommendation", ChannelRecommendation,
                              {"primary_channels": "N/A", "channel_rationale": "N/A",
                               "expected_reach": "N/A"})
 
-    structured_llm = llm.with_structured_output(ChannelRecommendation)
+    structured_llm = _get_llm().with_structured_output(ChannelRecommendation)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _recommend_channels(prompt):
@@ -554,11 +595,11 @@ def optimize_budget(state: GraphState) -> dict:
     )
     
     if retries >= MAX_RETRIES:
-        return _llm_fallback("optimize_budget", budget_prompt, BudgetAllocation,
+        return _llm_fallback("optimize_budget", budget_prompt, "budget_allocation", BudgetAllocation,
                              {"channel_breakdown": "N/A", "timeline_phases": "N/A",
                               "contingency_plan": "N/A"})
 
-    structured_llm = llm.with_structured_output(BudgetAllocation)
+    structured_llm = _get_llm().with_structured_output(BudgetAllocation)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _optimize_budget(prompt):
@@ -593,11 +634,11 @@ def assess_risks(state: GraphState) -> dict:
     )
     
     if retries >= MAX_RETRIES:
-        return _llm_fallback("assess_risks", risk_prompt, RiskAssessment,
+        return _llm_fallback("assess_risks", risk_prompt, "risk_assessment", RiskAssessment,
                              {"identified_risks": "N/A", "mitigation_strategies": "N/A",
                               "success_metrics": "N/A"})
 
-    structured_llm = llm.with_structured_output(RiskAssessment)
+    structured_llm = _get_llm().with_structured_output(RiskAssessment)
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _assess_risks(prompt):
@@ -734,7 +775,7 @@ def format_markdown_report(state: GraphState) -> dict:
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _format_report(prompt):
-        return llm.invoke(prompt)
+        return _get_llm().invoke(prompt)
 
     try:
         formatted_md = _format_report(formatting_prompt)
@@ -793,9 +834,6 @@ def save_approved_markdown(state: GraphState) -> dict:
     try:
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(formatted_md)
-        # Configure caching to avoid burning tokens during repeated dev testing
-        set_llm_cache(SQLiteCache(database_path=".langchain.db"))
-
         logger.info(f"Report successfully saved to: {filename}")
         return {"formatted_markdown": filename}
     except Exception as e:
