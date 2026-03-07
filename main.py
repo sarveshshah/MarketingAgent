@@ -177,7 +177,6 @@ def collect_campaign_input(state: GraphState) -> dict:
     if state.get("campaign_input"):
         return {}
 
-
     # TEST INPUT 
     # campaign_input = {
     #     "campaign_type": "New Phone Launch",
@@ -434,6 +433,27 @@ def conduct_market_research(state: GraphState) -> dict:
 
     return {"market_trends": compiled_trends}
 
+MAX_RETRIES = 2
+
+def _llm_fallback(node_name: str, prompt: str, model_cls: type, fallback_fields: dict) -> dict:
+    """Run the plain LLM (no structured output) as a last-resort fallback.
+
+    Tries to get a text response and stuffs the first field with the raw content.
+    Returns a state-patch dict with the output key reset and retries cleared.
+    """
+    output_key = next(iter(fallback_fields))          # e.g. "strategy"
+    first_field = list(model_cls.model_fields)[0]     # first field of the pydantic model
+    logger.warning("Max retries reached for %s. Using text fallback.", node_name)
+    try:
+        response = llm.invoke(prompt)
+        content = str(response.content if hasattr(response, "content") else response)
+        fields = {**fallback_fields, first_field: content[:500] + " ... (text fallback)"}
+        return {output_key: model_cls(**fields), "error": None, "retries": 0}
+    except Exception as e:
+        logger.error("Fallback text LLM also failed for %s: %s", node_name, e)
+        return {output_key: model_cls(**fallback_fields), "error": None, "retries": 0}
+
+
 # Third node: Generate the high-level marketing strategy based on the data insights and market trends
 def generate_strategy(state: GraphState) -> dict:
     """Generate a structured marketing strategy using the data insights."""
@@ -456,23 +476,10 @@ def generate_strategy(state: GraphState) -> dict:
         goals=campaign_input.goals
     )
     
-    if retries >= 2:
-        logger.warning("Max retries reached for generate_strategy. Using text fallback.")
-        try:
-            strategy_text = llm.invoke(strategy_prompt)
-            content = str(strategy_text.content if hasattr(strategy_text, 'content') else strategy_text)
-            return {"strategy": CampaignStrategy(
-                target_audience=content[:500] + "... (parsed as fallback text)",
-                campaign_channels="N/A (See target audience for full text)",
-                acquisition_cost_estimate="N/A", expected_roi="N/A"
-            ), "error": None, "retries": 0}
-        except Exception as e:
-            logger.error(f"Fallback text LLM also failed for generate_strategy: {e}")
-            return {"strategy": CampaignStrategy(
-                target_audience="N/A (Generation failed)",
-                campaign_channels="N/A",
-                acquisition_cost_estimate="N/A", expected_roi="N/A"
-            ), "error": None, "retries": 0}
+    if retries >= MAX_RETRIES:
+        return _llm_fallback("generate_strategy", strategy_prompt, CampaignStrategy,
+                             {"target_audience": "N/A", "campaign_channels": "N/A",
+                              "acquisition_cost_estimate": "N/A", "expected_roi": "N/A"})
 
     structured_llm = llm.with_structured_output(CampaignStrategy)
 
@@ -509,23 +516,10 @@ def recommend_channels(state: GraphState) -> dict:
         timeline=campaign_input.timeline
     )
     
-    if retries >= 2:
-        logger.warning("Max retries reached for recommend_channels. Using text fallback.")
-        try:
-            rec_text = llm.invoke(channel_prompt)
-            content = str(rec_text.content if hasattr(rec_text, 'content') else rec_text)
-            return {"channel_recommendation": ChannelRecommendation(
-                primary_channels=content[:300] + "...",
-                channel_rationale="Generated via fallback. See text above.",
-                expected_reach="N/A"
-            ), "error": None, "retries": 0}
-        except Exception as e:
-            logger.error(f"Fallback text LLM also failed for recommend_channels: {e}")
-            return {"channel_recommendation": ChannelRecommendation(
-                primary_channels="N/A",
-                channel_rationale="N/A (Generation failed)",
-                expected_reach="N/A"
-            ), "error": None, "retries": 0}
+    if retries >= MAX_RETRIES:
+        return _llm_fallback("recommend_channels", channel_prompt, ChannelRecommendation,
+                             {"primary_channels": "N/A", "channel_rationale": "N/A",
+                              "expected_reach": "N/A"})
 
     structured_llm = llm.with_structured_output(ChannelRecommendation)
     
@@ -559,23 +553,10 @@ def optimize_budget(state: GraphState) -> dict:
         channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
     )
     
-    if retries >= 2:
-        logger.warning("Max retries reached for optimize_budget. Using text fallback.")
-        try:
-            alloc_text = llm.invoke(budget_prompt)
-            content = str(alloc_text.content if hasattr(alloc_text, 'content') else alloc_text)
-            return {"budget_allocation": BudgetAllocation(
-                channel_breakdown=content[:300] + "...",
-                timeline_phases="Generated via fallback. See text above.",
-                contingency_plan="N/A"
-            ), "error": None, "retries": 0}
-        except Exception as e:
-            logger.error(f"Fallback text LLM also failed for optimize_budget: {e}")
-            return {"budget_allocation": BudgetAllocation(
-                channel_breakdown="N/A",
-                timeline_phases="N/A (Generation failed)",
-                contingency_plan="N/A"
-            ), "error": None, "retries": 0}
+    if retries >= MAX_RETRIES:
+        return _llm_fallback("optimize_budget", budget_prompt, BudgetAllocation,
+                             {"channel_breakdown": "N/A", "timeline_phases": "N/A",
+                              "contingency_plan": "N/A"})
 
     structured_llm = llm.with_structured_output(BudgetAllocation)
     
@@ -611,23 +592,10 @@ def assess_risks(state: GraphState) -> dict:
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
-    if retries >= 2:
-        logger.warning("Max retries reached for assess_risks. Using text fallback.")
-        try:
-            risk_text = llm.invoke(risk_prompt)
-            content = str(risk_text.content if hasattr(risk_text, 'content') else risk_text)
-            return {"risk_assessment": RiskAssessment(
-                identified_risks=content[:300] + "...",
-                mitigation_strategies="Generated via fallback. See text above.",
-                success_metrics="N/A"
-            ), "error": None, "retries": 0}
-        except Exception as e:
-            logger.error(f"Fallback text LLM also failed for assess_risks: {e}")
-            return {"risk_assessment": RiskAssessment(
-                identified_risks="N/A",
-                mitigation_strategies="N/A (Generation failed)",
-                success_metrics="N/A"
-            ), "error": None, "retries": 0}
+    if retries >= MAX_RETRIES:
+        return _llm_fallback("assess_risks", risk_prompt, RiskAssessment,
+                             {"identified_risks": "N/A", "mitigation_strategies": "N/A",
+                              "success_metrics": "N/A"})
 
     structured_llm = llm.with_structured_output(RiskAssessment)
     
