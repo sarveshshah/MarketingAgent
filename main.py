@@ -12,6 +12,8 @@ from langchain_experimental.tools import PythonREPLTool
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools import DuckDuckGoSearchRun
+from langchain.globals import set_llm_cache
+from langchain_community.cache import SQLiteCache
 
 from tenacity import retry, stop_after_attempt, wait_exponential
 import io
@@ -788,6 +790,9 @@ def save_approved_markdown(state: GraphState) -> dict:
     try:
         with open(filename, 'w') as f:
             f.write(formatted_md)
+        # Configure caching to avoid burning tokens during repeated dev testing
+        set_llm_cache(SQLiteCache(database_path=".langchain.db"))
+
         logger.info(f"Report successfully saved to: {filename}")
         return {"formatted_markdown": filename}
     except Exception as e:
