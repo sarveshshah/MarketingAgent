@@ -1,9 +1,19 @@
 # imports
-import pandas as pd
-from pathlib import Path
+"""Main"""
 from datetime import datetime
-from dotenv import load_dotenv
+
+import io
+import traceback
+
+import json
+import re
+
+from typing import Annotated, Any, Optional
 import logging
+
+from pathlib import Path
+
+import pandas as pd
 
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -11,17 +21,16 @@ from langchain_openai import ChatOpenAI
 from langchain_experimental.tools import PythonREPLTool
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.globals import set_llm_cache
 from langchain_community.cache import SQLiteCache
+from langchain_community.tools import DuckDuckGoSearchRun
 
 from tenacity import retry, stop_after_attempt, wait_exponential
-import io
 
-from typing import Annotated, Any, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from dotenv import load_dotenv
 # Load API keys from .env file
 load_dotenv()
 
@@ -63,8 +72,8 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 # LLM configurations - you can use same model for both nodes or different ones depending on the task requirements
 # I found that Gemini was able to produce stronger data insights while ChatGPT was better at writing the report
 data_analyst_llm = ChatGoogleGenerativeAI(
-    model="gemini-3-pro-preview", 
-    temperature=0, 
+    model="gemini-2.5-flash",
+    temperature=0,
     verbose=True
 )
 
@@ -93,12 +102,13 @@ def load_prompt(prompt_name: str, **kwargs: Any) -> str:
     try:
         return template.format(**kwargs)
     except KeyError as e:
-        raise ValueError(f"Missing required variable in prompt template: {e}")
+        raise ValueError(f"Missing required variable in prompt template: {e}") from e
     
 
 # Input structure for the campaign details - this is what the user will provide at the start of the graph
 # This was intentntiionally designed to be structured and not a free text input to ensure the LLM receives clear, consistent information to work with in the subsequent nodes.
 class CampaignInput(BaseModel):
+    """Campaign input structure"""
     campaign_type: str = Field(description="The type of marketing campaign (e.g., product launch, brand awareness, retention).")
     target_industry: str = Field(description="The target industry or market segment for the campaign.")
     budget: str = Field(description="The budget allocated for the campaign.")
@@ -107,6 +117,7 @@ class CampaignInput(BaseModel):
 
 # Structure for the LLM to generate the strategy
 class CampaignStrategy(BaseModel):
+    """Campaign strategy structure"""
     target_audience: str = Field(description="The target audience for the marketing campaign.")
     campaign_channels: str = Field(description="The channels to be used for the marketing campaign (e.g., email, social media, etc.).")
     acquisition_cost_estimate: str = Field(description="Estimated cost for customer acquisition through the campaign.")
@@ -114,25 +125,34 @@ class CampaignStrategy(BaseModel):
 
 # Structure for channel recommendations
 class ChannelRecommendation(BaseModel):
+    """Channel recommendation structure"""
     primary_channels: str = Field(description="Top 2-3 recommended channels with percentages")
     channel_rationale: str = Field(description="Why these channels are recommended")
     expected_reach: str = Field(description="Estimated reach and engagement metrics")
 
 # Create a structured output format for budget allocation recommendations
 class BudgetAllocation(BaseModel):
+    """Budget allocation structure"""
     channel_breakdown: str = Field(description="Budget allocation by channel with percentages")
     timeline_phases: str = Field(description="Budget distribution across timeline phases")
     contingency_plan: str = Field(description="Suggested contingency (typically 10-15% reserve)")
 
 # Identify potential risks and mitigation strategies
 class RiskAssessment(BaseModel):
+    """Risk assessment structure"""
     identified_risks: str = Field(description="Key risks ranked by severity")
     mitigation_strategies: str = Field(description="Specific actions to mitigate each risk")
     success_metrics: str = Field(description="Key performance indicators to track")
 
+
+def _keep_first_error(x: Optional[str], y: Optional[str]) -> Optional[str]:
+    """Reducer: keep the first non-None error across parallel node writes."""
+    return x if x is not None else y
+
 # Campaign state - includes both input and analysis results 
 # This state will be passed through each node in the graph, allowing them to read and update the relevant fields as they perform their tasks.
 class GraphState(TypedDict):
+    """Campaign state structure"""
     campaign_input: Optional[CampaignInput]
     past_campaign_insights: str
     market_trends: str
@@ -145,8 +165,9 @@ class GraphState(TypedDict):
     
     # Error handling and retry logic
     # Annotated with reducers to safely handle concurrent writes from parallel nodes
-    error: Annotated[Optional[str], lambda x, y: x if x is not None else y]
-    retries: Annotated[int, lambda x, y: max(x, y)]
+    error: Annotated[Optional[str], _keep_first_error]
+    retries: Annotated[int, max]
+
 
 # Initial node: Collect campaign input from user
 def collect_campaign_input(state: GraphState) -> dict:
@@ -218,7 +239,6 @@ def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
         tools=tools, 
         verbose=True, 
         handle_parsing_errors=True,
-        robust=True
     )
     
     # Execute the agent with the provided analysis prompt
@@ -237,7 +257,8 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     """
     logger.info("Analyzing past campaign data...")    
     campaign_input = state["campaign_input"]
-    
+    assert campaign_input is not None, "campaign_input must be set before analyze_past_campaigns"
+
     try:
         # Hard coded for the POC perscpective, can be enhanced with a database connections or providing user the ability to upload their own dataset in the UI
         df = pd.read_csv("data/marketing_campaign_dataset.csv")
@@ -258,7 +279,6 @@ def analyze_past_campaigns(state: GraphState) -> dict:
         
     except Exception as e:
         logger.error(f"Could not analyze data with agent. Error: {e}")
-        import traceback
         traceback.print_exc()
         data_insights = f"Data analysis unavailable due to error: {str(e)[:200]}"
 
@@ -338,6 +358,7 @@ def conduct_market_research(state: GraphState) -> dict:
 
     logger.info("Conducting robust market research...")
     campaign_input = state["campaign_input"]
+    assert campaign_input is not None, "campaign_input must be set before conduct_market_research"
     # 1. Dynamically generate targeted search queries using an LLM
     search_queries_prompt = load_prompt(
         "generate_search_queries_prompt",
@@ -358,10 +379,7 @@ def conduct_market_research(state: GraphState) -> dict:
         queries_response = _invoke_llm(search_queries_prompt)
         content = queries_response.content if hasattr(queries_response, 'content') else queries_response
         
-        # Try to parse the content as JSON using pydantic or json
-        import json
-        import re
-        
+        # Try to parse the content as JSON using pydantic or json        
         # Find json array in the string
         json_match = re.search(r'\[(.*?)\]', str(content), re.DOTALL)
         if json_match:
@@ -422,6 +440,7 @@ def generate_strategy(state: GraphState) -> dict:
     retries_val = state.get("retries", 0)
     retries = retries_val if isinstance(retries_val, int) else 0
     campaign_input = state["campaign_input"]
+    assert campaign_input is not None, "campaign_input must be set before generate_strategy"
     data_insights = state.get("past_campaign_insights", "")
     market_trends = state.get("market_trends", "")
 
@@ -476,7 +495,8 @@ def recommend_channels(state: GraphState) -> dict:
     strategy = state.get("strategy")
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
-    
+    assert campaign_input is not None, "campaign_input must be set before recommend_channels"
+
     # Load prompt template and format with variables
     channel_prompt = load_prompt(
         "channel_recommendation_prompt",
@@ -527,7 +547,8 @@ def optimize_budget(state: GraphState) -> dict:
     retries = retries_val if isinstance(retries_val, int) else 0
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
-    
+    assert campaign_input is not None, "campaign_input must be set before optimize_budget"
+
     # Load prompt template and format with variables
     budget_prompt = load_prompt(
         "budget_optimization_prompt",
@@ -576,7 +597,8 @@ def assess_risks(state: GraphState) -> dict:
     retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
     campaign_input = state["campaign_input"]
-    
+    assert campaign_input is not None, "campaign_input must be set before assess_risks"
+
     # Load prompt template and format with variables
     risk_prompt = load_prompt(
         "risk_assessment_prompt",
@@ -632,7 +654,8 @@ def generate_fallback_report(state: GraphState) -> str:
     insights = state.get('past_campaign_insights', '')
     trends = state.get('market_trends', '')
     campaign_input = state['campaign_input']
-    
+    assert campaign_input is not None, "campaign_input must be set before generate_fallback_report"
+
     # Hardcoded markdown as a fallback if agent fails
     markdown_content = f"""# Marketing Campaign Strategy Report
 
@@ -714,7 +737,8 @@ def format_markdown_report(state: GraphState) -> dict:
     budget = state.get('budget_allocation')
     risks = state.get('risk_assessment')
     campaign_input = state["campaign_input"]
-    
+    assert campaign_input is not None, "campaign_input must be set before format_markdown_report"
+
     # Load prompt template and format with variables
     formatting_prompt = load_prompt(
         "markdown_formatting_prompt",
@@ -765,8 +789,8 @@ def human_approval_step(state: GraphState) -> dict:
     
     Displays the formatted markdown and waits for user confirmation.
     """
-    
     formatted_md = state.get('formatted_markdown', '')
+    assert formatted_md is not None, "formatted_markdown must be set before human_approval_step"
 
     # For UI so that humans can see the whole report and ask further questions or chose to redo analysis
     logger.info("=" * 70)
@@ -799,7 +823,7 @@ def save_approved_markdown(state: GraphState) -> dict:
     filename = f"./outputs/campaign_strategy_{timestamp}.md"
     
     try:
-        with open(filename, 'w') as f:
+        with open(filename, 'w', encoding='utf-8') as f:
             f.write(formatted_md)
         # Configure caching to avoid burning tokens during repeated dev testing
         set_llm_cache(SQLiteCache(database_path=".langchain.db"))
@@ -881,6 +905,7 @@ def run_campaign(campaign_input: CampaignInput, include_human_approval: bool = F
 
 
 def main() -> None:
+    """Main function to run the LangGraph."""
     logger.info("Starting LangGraph execution...")
     app = build_graph(include_human_approval=True).compile()
 

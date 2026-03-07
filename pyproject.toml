@@ -177,3 +177,18 @@ dev = [
     "pylint>=4.0.5",
     "ruff>=0.15.5",
 ]
+
+[tool.ruff.lint]
+ignore = ["W291", "W293", "G001", "G002", "G003", "G004", "UP031", "BLE001", "E722", "E501"]
+
+[tool.flake8]
+extend-ignore = ["W291", "W293", "W1201", "W1202", "W1203", "E722", "E501"]
+
+[tool.pylint.format]
+disable = ["trailing-whitespace", "line-too-long"]
+
+[tool.pylint.exceptions]
+disable = ["broad-exception-caught", "broad-exception-raised"]
+
+[tool.pylint.logging]
+disable = ["logging-format-interpolation", "logging-fstring-interpolation", "logging-not-lazy"]
