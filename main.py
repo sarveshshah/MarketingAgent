@@ -140,6 +140,10 @@ class GraphState(TypedDict):
     risk_assessment: Optional[RiskAssessment]
     formatted_markdown: Optional[str]
     human_approval: Optional[bool]
+    
+    # Error handling and retry logic
+    error: Optional[str]
+    retries: int
 
 # Initial node: Collect campaign input from user
 def collect_campaign_input(state: GraphState) -> dict:
@@ -404,13 +408,8 @@ def conduct_market_research(state: GraphState) -> dict:
 
 # Third node: Generate the high-level marketing strategy based on the data insights and market trends
 def generate_strategy(state: GraphState) -> dict:
-    """Generate a structured marketing strategy using the data insights.
-
-    Expects `past_campaign_insights` to be present in the state.
-    Returns structured fields that update the state.
-    """
-    structured_llm = llm.with_structured_output(CampaignStrategy)
-
+    """Generate a structured marketing strategy using the data insights."""
+    retries = state.get("retries", 0)
     campaign_input = state["campaign_input"]
     data_insights = state.get("past_campaign_insights", "")
     market_trends = state.get("market_trends", "")
@@ -426,6 +425,26 @@ def generate_strategy(state: GraphState) -> dict:
         timeline=campaign_input.timeline,
         goals=campaign_input.goals
     )
+    
+    if retries >= 2:
+        logger.warning("Max retries reached for generate_strategy. Using text fallback.")
+        try:
+            strategy_text = llm.invoke(strategy_prompt)
+            content = str(strategy_text.content if hasattr(strategy_text, 'content') else strategy_text)
+            return {"strategy": CampaignStrategy(
+                target_audience=content[:500] + "... (parsed as fallback text)",
+                campaign_channels="N/A (See target audience for full text)",
+                acquisition_cost_estimate="N/A", expected_roi="N/A"
+            ), "error": None, "retries": 0}
+        except Exception as e:
+            logger.error(f"Fallback text LLM also failed for generate_strategy: {e}")
+            return {"strategy": CampaignStrategy(
+                target_audience="N/A (Generation failed)",
+                campaign_channels="N/A",
+                acquisition_cost_estimate="N/A", expected_roi="N/A"
+            ), "error": None, "retries": 0}
+
+    structured_llm = llm.with_structured_output(CampaignStrategy)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _generate_strategy(prompt):
@@ -433,30 +452,15 @@ def generate_strategy(state: GraphState) -> dict:
 
     try:
         strategy = _generate_strategy(strategy_prompt)
+        return {"strategy": strategy, "error": None, "retries": 0}
     except Exception as e:
-        logger.error(f"Structured LLM failed: {e}. Falling back to text LLM.")
-        # fallback to the plain LLM interface if necessary
-        strategy_text = llm.invoke(strategy_prompt)
-        # best-effort parse: put the whole text into target_audience for visibility
-        return {"strategy": CampaignStrategy(
-            target_audience=str(strategy_text.content),
-            campaign_channels="N/A",
-            acquisition_cost_estimate="N/A",
-            expected_roi="N/A"
-        )}
-
-    return {"strategy": strategy}
+        logger.error(f"generate_strategy failed: {e}. Graph will retry ({retries+1}/2).")
+        return {"error": "generate_strategy", "retries": retries + 1}
 
 # Fourth node: Recommend specific marketing channels based on the strategy and data insights
 def recommend_channels(state: GraphState) -> dict:
-    """Recommend specific marketing channels based on data insights and campaign profile.
-    
-    Uses the data insights and strategy to provide detailed channel recommendations
-    with reasoning and expected performance metrics.
-    """
-    
-    structured_llm = llm.with_structured_output(ChannelRecommendation)
-    
+    """Recommend specific marketing channels based on data insights and campaign profile."""
+    retries = state.get("retries", 0)
     strategy = state.get("strategy")
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
@@ -473,31 +477,41 @@ def recommend_channels(state: GraphState) -> dict:
         timeline=campaign_input.timeline
     )
     
+    if retries >= 2:
+        logger.warning("Max retries reached for recommend_channels. Using text fallback.")
+        try:
+            rec_text = llm.invoke(channel_prompt)
+            content = str(rec_text.content if hasattr(rec_text, 'content') else rec_text)
+            return {"channel_recommendation": ChannelRecommendation(
+                primary_channels=content[:300] + "...",
+                channel_rationale="Generated via fallback. See text above.",
+                expected_reach="N/A"
+            ), "error": None, "retries": 0}
+        except Exception as e:
+            logger.error(f"Fallback text LLM also failed for recommend_channels: {e}")
+            return {"channel_recommendation": ChannelRecommendation(
+                primary_channels="N/A",
+                channel_rationale="N/A (Generation failed)",
+                expected_reach="N/A"
+            ), "error": None, "retries": 0}
+
+    structured_llm = llm.with_structured_output(ChannelRecommendation)
+    
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _recommend_channels(prompt):
         return structured_llm.invoke(prompt)
 
     try:
         recommendation = _recommend_channels(channel_prompt)
-        return {"channel_recommendation": recommendation}
+        return {"channel_recommendation": recommendation, "error": None, "retries": 0}
     except Exception as e:
-        logger.error(f"Channel recommendation failed: {e}")
-        return {"channel_recommendation": ChannelRecommendation(
-            primary_channels="Unable to generate recommendations",
-            channel_rationale=str(e),
-            expected_reach="N/A"
-        )}
+        logger.error(f"recommend_channels failed: {e}. Graph will retry ({retries+1}/2).")
+        return {"error": "recommend_channels", "retries": retries + 1}
 
 # Fifth node: Optimize the budget allocation across channels and timeline phases
 def optimize_budget(state: GraphState) -> dict:
-    """Create a detailed budget allocation plan across channels and timeline phases.
-    
-    Breaks down the campaign budget into specific allocations by channel and
-    across different timeline phases, with contingency planning.
-    """
-    
-    structured_llm = llm.with_structured_output(BudgetAllocation)
-    
+    """Create a detailed budget allocation plan across channels and timeline phases."""
+    retries = state.get("retries", 0)
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
     
@@ -511,31 +525,41 @@ def optimize_budget(state: GraphState) -> dict:
         channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
     )
     
+    if retries >= 2:
+        logger.warning("Max retries reached for optimize_budget. Using text fallback.")
+        try:
+            alloc_text = llm.invoke(budget_prompt)
+            content = str(alloc_text.content if hasattr(alloc_text, 'content') else alloc_text)
+            return {"budget_allocation": BudgetAllocation(
+                channel_breakdown=content[:300] + "...",
+                timeline_phases="Generated via fallback. See text above.",
+                contingency_plan="N/A"
+            ), "error": None, "retries": 0}
+        except Exception as e:
+            logger.error(f"Fallback text LLM also failed for optimize_budget: {e}")
+            return {"budget_allocation": BudgetAllocation(
+                channel_breakdown="N/A",
+                timeline_phases="N/A (Generation failed)",
+                contingency_plan="N/A"
+            ), "error": None, "retries": 0}
+
+    structured_llm = llm.with_structured_output(BudgetAllocation)
+    
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _optimize_budget(prompt):
         return structured_llm.invoke(prompt)
 
     try:
         allocation = _optimize_budget(budget_prompt)
-        return {"budget_allocation": allocation}
+        return {"budget_allocation": allocation, "error": None, "retries": 0}
     except Exception as e:
-        logger.error(f"Budget optimization failed: {e}")
-        return {"budget_allocation": BudgetAllocation(
-            channel_breakdown="Unable to generate breakdown",
-            timeline_phases="N/A",
-            contingency_plan="N/A"
-        )}
+        logger.error(f"optimize_budget failed: {e}. Graph will retry ({retries+1}/2).")
+        return {"error": "optimize_budget", "retries": retries + 1}
 
 # Sixth node: Assess campaign risks and provide mitigation strategies
 def assess_risks(state: GraphState) -> dict:
-    """Assess campaign risks and provide mitigation strategies.
-    
-    Identifies potential risks specific to the campaign and provides
-    actionable mitigation strategies and success metrics.
-    """
-    
-    structured_llm = llm.with_structured_output(RiskAssessment)
-    
+    """Assess campaign risks and provide mitigation strategies."""
+    retries = state.get("retries", 0)
     strategy = state.get("strategy")
     budget_alloc = state.get("budget_allocation")
     campaign_input = state["campaign_input"]
@@ -552,20 +576,36 @@ def assess_risks(state: GraphState) -> dict:
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
+    if retries >= 2:
+        logger.warning("Max retries reached for assess_risks. Using text fallback.")
+        try:
+            risk_text = llm.invoke(risk_prompt)
+            content = str(risk_text.content if hasattr(risk_text, 'content') else risk_text)
+            return {"risk_assessment": RiskAssessment(
+                identified_risks=content[:300] + "...",
+                mitigation_strategies="Generated via fallback. See text above.",
+                success_metrics="N/A"
+            ), "error": None, "retries": 0}
+        except Exception as e:
+            logger.error(f"Fallback text LLM also failed for assess_risks: {e}")
+            return {"risk_assessment": RiskAssessment(
+                identified_risks="N/A",
+                mitigation_strategies="N/A (Generation failed)",
+                success_metrics="N/A"
+            ), "error": None, "retries": 0}
+
+    structured_llm = llm.with_structured_output(RiskAssessment)
+    
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def _assess_risks(prompt):
         return structured_llm.invoke(prompt)
 
     try:
         assessment = _assess_risks(risk_prompt)
-        return {"risk_assessment": assessment}
+        return {"risk_assessment": assessment, "error": None, "retries": 0}
     except Exception as e:
-        print(f"Warning: Risk assessment failed: {e}")
-        return {"risk_assessment": RiskAssessment(
-            identified_risks="Unable to assess risks",
-            mitigation_strategies="N/A",
-            success_metrics="N/A"
-        )}
+        logger.warning(f"assess_risks failed: {e}. Graph will retry ({retries+1}/2).")
+        return {"error": "assess_risks", "retries": retries + 1}
 
 
 # Helper node to generate a fallback markdown report if the LLM formatting fails at the end
@@ -781,10 +821,19 @@ def build_graph(include_human_approval: bool = True) -> StateGraph:
     builder.add_edge("analyze_past_campaigns", "generate_strategy")
     builder.add_edge("conduct_market_research", "generate_strategy")
 
-    builder.add_edge("generate_strategy", "recommend_channels")
-    builder.add_edge("recommend_channels", "optimize_budget")
-    builder.add_edge("optimize_budget", "assess_risks")
-    builder.add_edge("assess_risks", "format_markdown_report")
+    # Conditional logic using self-loops
+    builder.add_conditional_edges("generate_strategy", 
+        lambda state: "generate_strategy" if state.get("error") == "generate_strategy" else "recommend_channels"
+    )
+    builder.add_conditional_edges("recommend_channels", 
+        lambda state: "recommend_channels" if state.get("error") == "recommend_channels" else "optimize_budget"
+    )
+    builder.add_conditional_edges("optimize_budget", 
+        lambda state: "optimize_budget" if state.get("error") == "optimize_budget" else "assess_risks"
+    )
+    builder.add_conditional_edges("assess_risks", 
+        lambda state: "assess_risks" if state.get("error") == "assess_risks" else "format_markdown_report"
+    )
 
     if include_human_approval:
         builder.add_edge("format_markdown_report", "human_approval_step")
