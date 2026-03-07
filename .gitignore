@@ -13887,3 +13887,5 @@ frontend/node_modules/zwitch/index.js
 frontend/node_modules/zwitch/license
 frontend/node_modules/zwitch/package.json
 frontend/node_modules/zwitch/readme.md
+pyrightconfig.json
+.python-version

@@ -12,7 +12,7 @@ from langchain_experimental.tools import PythonREPLTool
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools import DuckDuckGoSearchRun
-from langchain.globals import set_llm_cache
+from langchain_core.globals import set_llm_cache
 from langchain_community.cache import SQLiteCache
 
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -400,7 +400,7 @@ def conduct_market_research(state: GraphState) -> dict:
         else:
             compiled_trends = str(content)
             
-        logger.info(f"Successfully synthesized market trends.")
+        logger.info("Successfully synthesized market trends.")
     except Exception as e:
         logger.error(f"Market research synthesis failed: {e}")
         # As a fallback, return the raw (but truncated) search results
@@ -411,7 +411,8 @@ def conduct_market_research(state: GraphState) -> dict:
 # Third node: Generate the high-level marketing strategy based on the data insights and market trends
 def generate_strategy(state: GraphState) -> dict:
     """Generate a structured marketing strategy using the data insights."""
-    retries = state.get("retries", 0)
+    retries_val = state.get("retries", 0)
+    retries = retries_val if isinstance(retries_val, int) else 0
     campaign_input = state["campaign_input"]
     data_insights = state.get("past_campaign_insights", "")
     market_trends = state.get("market_trends", "")
@@ -462,7 +463,8 @@ def generate_strategy(state: GraphState) -> dict:
 # Fourth node: Recommend specific marketing channels based on the strategy and data insights
 def recommend_channels(state: GraphState) -> dict:
     """Recommend specific marketing channels based on data insights and campaign profile."""
-    retries = state.get("retries", 0)
+    retries_val = state.get("retries", 0)
+    retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
@@ -513,7 +515,8 @@ def recommend_channels(state: GraphState) -> dict:
 # Fifth node: Optimize the budget allocation across channels and timeline phases
 def optimize_budget(state: GraphState) -> dict:
     """Create a detailed budget allocation plan across channels and timeline phases."""
-    retries = state.get("retries", 0)
+    retries_val = state.get("retries", 0)
+    retries = retries_val if isinstance(retries_val, int) else 0
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
     
@@ -561,9 +564,9 @@ def optimize_budget(state: GraphState) -> dict:
 # Sixth node: Assess campaign risks and provide mitigation strategies
 def assess_risks(state: GraphState) -> dict:
     """Assess campaign risks and provide mitigation strategies."""
-    retries = state.get("retries", 0)
+    retries_val = state.get("retries", 0)
+    retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
-    budget_alloc = state.get("budget_allocation")
     campaign_input = state["campaign_input"]
     
     # Load prompt template and format with variables
