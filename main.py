@@ -197,25 +197,6 @@ class RiskAssessment(BaseModel):
     mitigation_strategies: str = Field(description="Specific actions to mitigate each risk")
     success_metrics: str = Field(description="Key performance indicators to track")
 
-
-def _keep_first_error(current: Optional[str], incoming: Optional[str]) -> Optional[str]:
-    """Reducer for the `error` state field across parallel node writes.
-
-    Args:
-        current:  The error value already stored in state before this node ran.
-        incoming: The error value the node just returned.
-
-    Rules:
-      - `incoming=None` is an explicit reset (node succeeded) — always clears the error.
-      - `incoming="<node_name>"` sets the error.
-      - When two parallel nodes both write a non-None error, the first one wins.
-    """
-    # Explicit None reset always wins — the node succeeded or cleared the error
-    if incoming is None:
-        return None
-    # incoming is a real error string; keep it (current may be None or a prior error)
-    return incoming if current is None else current
-
 # Campaign state - includes both input and analysis results 
 # This state will be passed through each node in the graph, allowing them to read and update the relevant fields as they perform their tasks.
 class GraphState(TypedDict):
@@ -229,11 +210,6 @@ class GraphState(TypedDict):
     risk_assessment: Optional[RiskAssessment]
     formatted_markdown: Optional[str]
     human_approval: Optional[bool]
-    
-    # Error handling and retry logic
-    # Annotated with reducers to safely handle concurrent writes from parallel nodes
-    error: Annotated[Optional[str], _keep_first_error]
-    retries: Annotated[int, max]
 
 
 # Initial node: Collect campaign input from user
@@ -489,8 +465,6 @@ def conduct_market_research(state: GraphState) -> dict:
 
     return {"market_trends": compiled_trends}
 
-MAX_RETRIES = settings.max_retries
-
 def _llm_fallback(node_name: str, prompt: str, state_key: str, model_cls: type, fallback_fields: dict) -> dict:
     """Run the plain LLM (no structured output) as a last-resort fallback.
 
@@ -503,22 +477,20 @@ def _llm_fallback(node_name: str, prompt: str, state_key: str, model_cls: type, 
                          the raw LLM text if the unstructured call succeeds.
     """
     first_field = list(model_cls.model_fields)[0]     # first field of the pydantic model
-    logger.warning("Max retries reached for %s. Using text fallback.", node_name)
+    logger.warning("Structured output failed for %s. Using text fallback.", node_name)
     try:
         response = _get_llm().invoke(prompt)
         content = str(response.content if hasattr(response, "content") else response)
         fields = {**fallback_fields, first_field: content[:500] + " ... (text fallback)"}
-        return {state_key: model_cls(**fields), "error": None, "retries": 0}
+        return {state_key: model_cls(**fields)}
     except Exception as e:
         logger.error("Fallback text LLM also failed for %s: %s", node_name, e)
-        return {state_key: model_cls(**fallback_fields), "error": None, "retries": 0}
+        return {state_key: model_cls(**fallback_fields)}
 
 
 # Third node: Generate the high-level marketing strategy based on the data insights and market trends
 def generate_strategy(state: GraphState) -> dict:
     """Generate a structured marketing strategy using the data insights."""
-    retries_val = state.get("retries", 0)
-    retries = retries_val if isinstance(retries_val, int) else 0
     campaign_input = state["campaign_input"]
     if campaign_input is None:
         raise ValueError("campaign_input must be set before generate_strategy")
@@ -536,11 +508,6 @@ def generate_strategy(state: GraphState) -> dict:
         timeline=campaign_input.timeline,
         goals=campaign_input.goals
     )
-    
-    if retries >= MAX_RETRIES:
-        return _llm_fallback("generate_strategy", strategy_prompt, "strategy", CampaignStrategy,
-                             {"target_audience": "N/A", "campaign_channels": "N/A",
-                              "acquisition_cost_estimate": "N/A", "expected_roi": "N/A"})
 
     structured_llm = _get_llm().with_structured_output(CampaignStrategy)
 
@@ -550,16 +517,16 @@ def generate_strategy(state: GraphState) -> dict:
 
     try:
         strategy = _generate_strategy(strategy_prompt)
-        return {"strategy": strategy, "error": None, "retries": 0}
+        return {"strategy": strategy}
     except Exception as e:
-        logger.error(f"generate_strategy failed: {e}. Graph will retry ({retries+1}/2).")
-        return {"error": "generate_strategy", "retries": retries + 1}
+        logger.error(f"generate_strategy failed all retries: {e}. Executing fallback...")
+        return _llm_fallback("generate_strategy", strategy_prompt, "strategy", CampaignStrategy,
+                             {"target_audience": "N/A", "campaign_channels": "N/A",
+                              "acquisition_cost_estimate": "N/A", "expected_roi": "N/A"})
 
 # Fourth node: Recommend specific marketing channels based on the strategy and data insights
 def recommend_channels(state: GraphState) -> dict:
     """Recommend specific marketing channels based on data insights and campaign profile."""
-    retries_val = state.get("retries", 0)
-    retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
     insights = state.get("past_campaign_insights", "")
     campaign_input = state["campaign_input"]
@@ -578,11 +545,6 @@ def recommend_channels(state: GraphState) -> dict:
         timeline=campaign_input.timeline
     )
     
-    if retries >= MAX_RETRIES:
-        return _llm_fallback("recommend_channels", channel_prompt, "channel_recommendation", ChannelRecommendation,
-                             {"primary_channels": "N/A", "channel_rationale": "N/A",
-                              "expected_reach": "N/A"})
-
     structured_llm = _get_llm().with_structured_output(ChannelRecommendation)
     
     @standard_retry
@@ -591,16 +553,16 @@ def recommend_channels(state: GraphState) -> dict:
 
     try:
         recommendation = _recommend_channels(channel_prompt)
-        return {"channel_recommendation": recommendation, "error": None, "retries": 0}
+        return {"channel_recommendation": recommendation}
     except Exception as e:
-        logger.error(f"recommend_channels failed: {e}. Graph will retry ({retries+1}/2).")
-        return {"error": "recommend_channels", "retries": retries + 1}
+        logger.error(f"recommend_channels failed all retries: {e}. Executing fallback...")
+        return _llm_fallback("recommend_channels", channel_prompt, "channel_recommendation", ChannelRecommendation,
+                             {"primary_channels": "N/A", "channel_rationale": "N/A",
+                              "expected_reach": "N/A"})
 
 # Fifth node: Optimize the budget allocation across channels and timeline phases
 def optimize_budget(state: GraphState) -> dict:
     """Create a detailed budget allocation plan across channels and timeline phases."""
-    retries_val = state.get("retries", 0)
-    retries = retries_val if isinstance(retries_val, int) else 0
     channel_rec = state.get("channel_recommendation")
     campaign_input = state["campaign_input"]
     if campaign_input is None:
@@ -616,11 +578,6 @@ def optimize_budget(state: GraphState) -> dict:
         channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
     )
     
-    if retries >= MAX_RETRIES:
-        return _llm_fallback("optimize_budget", budget_prompt, "budget_allocation", BudgetAllocation,
-                             {"channel_breakdown": "N/A", "timeline_phases": "N/A",
-                              "contingency_plan": "N/A"})
-
     structured_llm = _get_llm().with_structured_output(BudgetAllocation)
     
     @standard_retry
@@ -629,16 +586,16 @@ def optimize_budget(state: GraphState) -> dict:
 
     try:
         allocation = _optimize_budget(budget_prompt)
-        return {"budget_allocation": allocation, "error": None, "retries": 0}
+        return {"budget_allocation": allocation}
     except Exception as e:
-        logger.error(f"optimize_budget failed: {e}. Graph will retry ({retries+1}/2).")
-        return {"error": "optimize_budget", "retries": retries + 1}
+        logger.error(f"optimize_budget failed all retries: {e}. Executing fallback...")
+        return _llm_fallback("optimize_budget", budget_prompt, "budget_allocation", BudgetAllocation,
+                             {"channel_breakdown": "N/A", "timeline_phases": "N/A",
+                              "contingency_plan": "N/A"})
 
 # Sixth node: Assess campaign risks and provide mitigation strategies
 def assess_risks(state: GraphState) -> dict:
     """Assess campaign risks and provide mitigation strategies."""
-    retries_val = state.get("retries", 0)
-    retries = retries_val if isinstance(retries_val, int) else 0
     strategy = state.get("strategy")
     campaign_input = state["campaign_input"]
     if campaign_input is None:
@@ -656,11 +613,6 @@ def assess_risks(state: GraphState) -> dict:
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
-    if retries >= MAX_RETRIES:
-        return _llm_fallback("assess_risks", risk_prompt, "risk_assessment", RiskAssessment,
-                             {"identified_risks": "N/A", "mitigation_strategies": "N/A",
-                              "success_metrics": "N/A"})
-
     structured_llm = _get_llm().with_structured_output(RiskAssessment)
     
     @standard_retry
@@ -669,10 +621,12 @@ def assess_risks(state: GraphState) -> dict:
 
     try:
         assessment = _assess_risks(risk_prompt)
-        return {"risk_assessment": assessment, "error": None, "retries": 0}
+        return {"risk_assessment": assessment}
     except Exception as e:
-        logger.warning(f"assess_risks failed: {e}. Graph will retry ({retries+1}/2).")
-        return {"error": "assess_risks", "retries": retries + 1}
+        logger.warning(f"assess_risks failed all retries: {e}. Executing fallback...")
+        return _llm_fallback("assess_risks", risk_prompt, "risk_assessment", RiskAssessment,
+                             {"identified_risks": "N/A", "mitigation_strategies": "N/A",
+                              "success_metrics": "N/A"})
 
 
 # Helper node to generate a fallback markdown report if the LLM formatting fails at the end
@@ -833,10 +787,7 @@ def human_approval_step(state: GraphState) -> dict:
     logger.info("=" * 70)
     logger.info(formatted_md[:2000])  # Preview first 2000 chars
     logger.info("\n... (partial report shown above) ...\n")
-    logger.info("=" * 70)
-    
-    approval = 'y'
-    # approval = input("\n✓ Save the report to markdown? (yes/no): ").strip().lower()
+    approval = input("\n✓ Save the report to markdown? (yes/no): ").strip().lower()
     human_approved = approval in ['yes', 'y', 'true', '1']
     
     return {"human_approval": human_approved}
@@ -894,26 +845,22 @@ def build_graph(include_human_approval: bool = True) -> StateGraph:
     builder.add_edge("analyze_past_campaigns", "generate_strategy")
     builder.add_edge("conduct_market_research", "generate_strategy")
 
-    # Conditional logic using self-loops and parallel fan-out
-    builder.add_conditional_edges("generate_strategy", 
-        lambda state: "generate_strategy" if state.get("error") == "generate_strategy" else ["recommend_channels", "assess_risks"]
-    )
-    builder.add_conditional_edges("recommend_channels", 
-        lambda state: "recommend_channels" if state.get("error") == "recommend_channels" else "optimize_budget"
-    )
-    
-    builder.add_conditional_edges("optimize_budget",
-        lambda state: "optimize_budget" if state.get("error") == "optimize_budget" else "merge_parallel"
-    )
-    builder.add_conditional_edges("assess_risks",
-        lambda state: "assess_risks" if state.get("error") == "assess_risks" else "merge_parallel"
-    )
+    builder.add_node("wait_for_budget", lambda state: {})
 
-    # Explicit merge node: LangGraph holds here until BOTH parallel branches
-    # (optimize_budget and assess_risks) have delivered their results, then
-    # advances to format_markdown_report — no cross-branch state peeking needed.
-    builder.add_node("merge_parallel", lambda state: {})
-    builder.add_edge("merge_parallel", "format_markdown_report")
+    # Parallel fan-out
+    builder.add_edge("generate_strategy", "recommend_channels")
+    builder.add_edge("generate_strategy", "assess_risks")
+
+    builder.add_edge("recommend_channels", "optimize_budget")
+    
+    # Pad the shorter parallel branch with a dummy node so it aligns topologically.
+    # LangGraph only cleanly merges parallel execution paths if they share the same 'superstep' depth.
+    builder.add_edge("assess_risks", "wait_for_budget")
+
+    # Static Fan-In: Both paths are exactly 2 nodes deep. 
+    # LangGraph will now perfectly merge them to format_markdown_report without double-execution!
+    builder.add_edge("optimize_budget", "format_markdown_report")
+    builder.add_edge("wait_for_budget", "format_markdown_report")
 
     if include_human_approval:
         builder.add_edge("format_markdown_report", "human_approval_step")
