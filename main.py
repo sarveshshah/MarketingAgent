@@ -574,7 +574,7 @@ def assess_risks(state: GraphState) -> dict:
         target_audience=strategy.target_audience if strategy else 'N/A',
         budget=campaign_input.budget,
         timeline=campaign_input.timeline,
-        channel_breakdown=budget_alloc.channel_breakdown if budget_alloc else 'N/A',
+        channel_breakdown=strategy.campaign_channels if strategy else 'N/A',
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
@@ -826,19 +826,31 @@ def build_graph(include_human_approval: bool = True) -> StateGraph:
     builder.add_edge("analyze_past_campaigns", "generate_strategy")
     builder.add_edge("conduct_market_research", "generate_strategy")
 
-    # Conditional logic using self-loops
+    # Conditional logic using self-loops and parallel fan-out
     builder.add_conditional_edges("generate_strategy", 
-        lambda state: "generate_strategy" if state.get("error") == "generate_strategy" else "recommend_channels"
+        lambda state: "generate_strategy" if state.get("error") == "generate_strategy" else ["recommend_channels", "assess_risks"]
     )
     builder.add_conditional_edges("recommend_channels", 
         lambda state: "recommend_channels" if state.get("error") == "recommend_channels" else "optimize_budget"
     )
-    builder.add_conditional_edges("optimize_budget", 
-        lambda state: "optimize_budget" if state.get("error") == "optimize_budget" else "assess_risks"
-    )
-    builder.add_conditional_edges("assess_risks", 
-        lambda state: "assess_risks" if state.get("error") == "assess_risks" else "format_markdown_report"
-    )
+    
+    # Dynamic Fan-In: Wait for BOTH parallel paths (optimize_budget and assess_risks) to finish
+    def budget_router(state):
+        if state.get("error") == "optimize_budget":
+            return "optimize_budget"
+        if state.get("risk_assessment"):
+            return "format_markdown_report"
+        return "__end__"
+
+    def risks_router(state):
+        if state.get("error") == "assess_risks":
+            return "assess_risks"
+        if state.get("budget_allocation"):
+            return "format_markdown_report"
+        return "__end__"
+
+    builder.add_conditional_edges("optimize_budget", budget_router)
+    builder.add_conditional_edges("assess_risks", risks_router)
 
     if include_human_approval:
         builder.add_edge("format_markdown_report", "human_approval_step")
