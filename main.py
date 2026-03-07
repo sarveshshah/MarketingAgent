@@ -259,27 +259,58 @@ def analyze_past_campaigns(state: GraphState) -> dict:
     return {"past_campaign_insights": data_insights}
 
 
-# Search agent: conducts DuckDuckGo searches for market research
+# Search agent: conducts Google searches primarily via Gemini, falling back to DuckDuckGo 
 def search_agent(queries: list) -> str:
-    """Execute search queries and compile results into a single text block."""
+    """Execute search queries using Gemini Google Search (primary) or DuckDuckGo (fallback)."""
     
+    # Initialize tools
+    try:
+        # Gemini's built-in search tool binding
+        gemini_search_llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-pro",
+            temperature=0,
+        )
+        gemini_search_llm = gemini_search_llm.bind(tools=[{"google_search": {}}])
+        has_gemini_search = True
+    except Exception as e:
+        logger.warning(f"Gemini Google Search could not be initialized: {e}. Will use DuckDuckGo exclusively.")
+        has_gemini_search = False
+        
+    ddg_tool = DuckDuckGoSearchRun()
+    
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
+    def _search_google(query: str) -> str:
+        response = gemini_search_llm.invoke(f"Perform a comprehensive Google search and summarize the findings for: {query}")
+        return response.content
+        
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
-    def _search(query: str) -> str:
-        return search_tool.invoke(query)
+    def _search_ddg(query: str) -> str:
+        return ddg_tool.invoke(query)
     
-    search_tool = DuckDuckGoSearchRun()
     all_results = []
     
     logger.info("Executing search queries...")
     for query in queries:
+        logger.info(f"  Running query: {query}")
+        results = None
+        
+        # Try Gemini Google Search first if available
+        if has_gemini_search:
+            try:
+                results = _search_google(query)
+                all_results.append(f"--- GEMINI GOOGLE SEARCH RESULTS FOR QUERY: {query} ---\n{results}")
+                continue # Success, move to next query
+            except Exception as e:
+                logger.warning(f"Gemini Google search failed for '{query}': {e}. Falling back to DuckDuckGo.")
+        
+        # Fallback to DuckDuckGo
         try:
-            logger.info(f"  Running query: {query}")
-            results = _search(query)
-            all_results.append(f"--- RESULTS FOR QUERY: {query} ---\n{results}")
+            results = _search_ddg(query)
+            all_results.append(f"--- DUCKDUCKGO RESULTS FOR QUERY: {query} ---\n{results}")
         except Exception as e:
-            logger.warning(f"Query failed: '{query}'. Error: {e}")
-            all_results.append(f"--- SEARCH FAILED FOR QUERY: {query} ---")
-    
+            logger.error(f"Both search methods failed for '{query}'. Error: {e}")
+            all_results.append(f"--- ALL SEARCHES FAILED FOR QUERY: {query} ---")
+            
     search_results_text = "\n\n".join(all_results)
     return search_results_text
 
@@ -293,14 +324,48 @@ def conduct_market_research(state: GraphState) -> dict:
 
     logger.info("Conducting robust market research...")
     campaign_input = state["campaign_input"]
+    # 1. Dynamically generate targeted search queries using an LLM
+    search_queries_prompt = load_prompt(
+        "generate_search_queries_prompt",
+        campaign_type=campaign_input.campaign_type,
+        target_industry=campaign_input.target_industry,
+        budget=campaign_input.budget,
+        timeline=campaign_input.timeline,
+        goals=campaign_input.goals,
+        current_year=datetime.now().year
+    )
     
-    # 1. Generate multiple, targeted search queries <- You can create another agent that can dynamically generate more queries based on the campaign input
-    queries = [
-        f"latest marketing trends for {campaign_input.campaign_type} in {campaign_input.target_industry} industry {datetime.now().year}",
-        f"consumer behavior trends and preferences in {campaign_input.target_industry} {datetime.now().year}",
-        f"successful marketing strategies for {campaign_input.campaign_type} targeting {campaign_input.target_industry}",
-        f"emerging marketing channels and technologies for {campaign_input.target_industry}"
-    ]
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def _invoke_llm(prompt):
+        return llm.invoke(prompt)
+
+    try:
+        logger.info("Generating dynamic search queries...")
+        queries_response = _invoke_llm(search_queries_prompt)
+        content = queries_response.content if hasattr(queries_response, 'content') else queries_response
+        
+        # Try to parse the content as JSON using pydantic or json
+        import json
+        import re
+        
+        # Find json array in the string
+        json_match = re.search(r'\[(.*?)\]', str(content), re.DOTALL)
+        if json_match:
+            queries = json.loads(f"[{json_match.group(1)}]")
+            # Ensure it's a list of strings
+            if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
+                raise ValueError("Parsed JSON is not a list of strings")
+        else:
+            raise ValueError("No JSON array found in LLM response")
+            
+    except Exception as e:
+        logger.warning(f"Failed to dynamically generate search queries: {e}. Falling back to default queries.")
+        queries = [
+            f"latest marketing trends for {campaign_input.campaign_type} in {campaign_input.target_industry} industry {datetime.now().year}",
+            f"consumer behavior trends and preferences in {campaign_input.target_industry} {datetime.now().year}",
+            f"successful marketing strategies for {campaign_input.campaign_type} targeting {campaign_input.target_industry}",
+            f"emerging marketing channels and technologies for {campaign_input.target_industry}"
+        ]
     
     # 2. Execute searches using the search agent
     search_results_text = search_agent(queries)
