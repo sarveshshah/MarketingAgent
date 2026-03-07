@@ -18,7 +18,7 @@ from langchain_community.cache import SQLiteCache
 from tenacity import retry, stop_after_attempt, wait_exponential
 import io
 
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -144,8 +144,9 @@ class GraphState(TypedDict):
     human_approval: Optional[bool]
     
     # Error handling and retry logic
-    error: Optional[str]
-    retries: int
+    # Annotated with reducers to safely handle concurrent writes from parallel nodes
+    error: Annotated[Optional[str], lambda x, y: x if x is not None else y]
+    retries: Annotated[int, lambda x, y: max(x, y)]
 
 # Initial node: Collect campaign input from user
 def collect_campaign_input(state: GraphState) -> dict:
@@ -276,7 +277,7 @@ def search_agent(queries: list) -> str:
             model="gemini-1.5-pro",
             temperature=0,
         )
-        gemini_search_llm = gemini_search_llm.bind(tools=[{"google_search": {}}])
+        gemini_search_llm = gemini_search_llm.bind_tools([{"google_search": {}}])
         has_gemini_search = True
     except Exception as e:
         logger.warning(f"Gemini Google Search could not be initialized: {e}. Will use DuckDuckGo exclusively.")
@@ -287,7 +288,14 @@ def search_agent(queries: list) -> str:
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=5))
     def _search_google(query: str) -> str:
         response = gemini_search_llm.invoke(f"Perform a comprehensive Google search and summarize the findings for: {query}")
-        return response.content
+        content = response.content
+        # Gemini grounded responses can return a list of content blocks
+        if isinstance(content, list):
+            return " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            ).strip()
+        return str(content)
         
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=10))
     def _search_ddg(query: str) -> str:
@@ -786,7 +794,7 @@ def save_approved_markdown(state: GraphState) -> dict:
         logger.info("Report NOT saved. No confirmation received.")
         return {"formatted_markdown": ""}  # Clear from state
     
-    formatted_md = state.get('formatted_markdown', '')
+    formatted_md = state.get('formatted_markdown') or ""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"./outputs/campaign_strategy_{timestamp}.md"
     
