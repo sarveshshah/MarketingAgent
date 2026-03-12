@@ -61,10 +61,10 @@ console_handler.setLevel(logging.INFO)
 console_formatter = logging.Formatter("%(message)s")
 console_handler.setFormatter(console_formatter)
 
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
-
-logger.info(f"MarketingAgent session started. Log file: {log_filename}")
+if not logger.handlers:
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    logger.info(f"MarketingAgent session started. Log file: {log_filename}")
 
 # Suppress verbose logging from LangChain and related libraries
 logging.getLogger("langchain").setLevel(logging.WARNING)
@@ -158,6 +158,30 @@ def load_prompt(prompt_name: str, **kwargs: Any) -> str:
         raise ValueError(f"Missing required variable in prompt template: {e}") from e
     
 
+# ---------------------------------------------------------------------------
+# Shared LLM invocation helpers
+# _get_structured_llm is cached (lru_cache) so with_structured_output() is
+# only built once per Pydantic model class rather than on every node call.
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=8)
+def _get_structured_llm(model_cls: type):
+    """Cached structured-output LLM per Pydantic model class."""
+    return _get_llm().with_structured_output(model_cls)
+
+
+@standard_retry
+def _invoke_llm(prompt: str):
+    """Retry-wrapped plain LLM invocation."""
+    return _get_llm().invoke(prompt)
+
+
+@standard_retry
+def _invoke_structured_llm(model_cls: type, prompt: str):
+    """Retry-wrapped structured-output LLM invocation."""
+    return _get_structured_llm(model_cls).invoke(prompt)
+
+
 # Input structure for the campaign details - this is what the user will provide at the start of the graph
 # This was intentntiionally designed to be structured and not a free text input to ensure the LLM receives clear, consistent information to work with in the subsequent nodes.
 class CampaignInput(BaseModel):
@@ -202,8 +226,8 @@ class RiskAssessment(BaseModel):
 class GraphState(TypedDict):
     """Campaign state structure"""
     campaign_input: Optional[CampaignInput]
-    past_campaign_insights: str
-    market_trends: str
+    past_campaign_insights: Optional[str]
+    market_trends: Optional[str]
     strategy: Optional[CampaignStrategy]
     channel_recommendation: Optional[ChannelRecommendation]
     budget_allocation: Optional[BudgetAllocation]
@@ -246,12 +270,6 @@ def collect_campaign_input(state: GraphState) -> dict:
 def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
     """Data analysis agent that uses a Python REPL tool to analyze the dataframe and extract insights."""
     
-    # Tenacity retry logic helps with the brittleness of the agent execution. 
-    # It will retry up to 3 times with exponential backoff if there are any errors during the agent invocation.
-    @standard_retry
-    def _invoke_agent(agent_executor, prompt_input):
-        return agent_executor.invoke(prompt_input)
-    
     # Create a Python REPL tool with the dataframe in its local scope
     tools = [PythonREPLTool(locals={"df": df})]
 
@@ -283,6 +301,10 @@ def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
         handle_parsing_errors=True,
     )
     
+    @standard_retry
+    def _invoke_agent(executor, prompt_input):
+        return executor.invoke(prompt_input)
+
     # Execute the agent with the provided analysis prompt
     agent_response = _invoke_agent(agent_executor, {"input": analysis_prompt})
     data_insights = agent_response["output"]
@@ -332,12 +354,10 @@ def analyze_past_campaigns(state: GraphState) -> dict:
 def search_agent(queries: list) -> str:
     """Execute search queries using Gemini Google Search (primary) or DuckDuckGo (fallback)."""
     
-    # Initialize tools
     gemini_search_llm = _get_search_llm()
     has_gemini_search = gemini_search_llm is not None
-        
     ddg_tool = DuckDuckGoSearchRun()
-    
+
     @fast_retry
     def _search_google(query: str) -> str:
         response = gemini_search_llm.invoke(f"Perform a comprehensive Google search and summarize the findings for: {query}")
@@ -349,11 +369,11 @@ def search_agent(queries: list) -> str:
                 for block in content
             ).strip()
         return str(content)
-        
+
     @standard_retry
     def _search_ddg(query: str) -> str:
         return ddg_tool.invoke(query)
-    
+
     all_results = []
     
     logger.info("Executing search queries...")
@@ -403,11 +423,6 @@ def conduct_market_research(state: GraphState) -> dict:
         current_year=datetime.now().year
     )
     
-    # Single retry-wrapped LLM caller used for both query generation and trend synthesis
-    @standard_retry
-    def _invoke_llm(prompt):
-        return _get_llm().invoke(prompt)
-
     try:
         logger.info("Generating dynamic search queries...")
         queries_response = _invoke_llm(search_queries_prompt)
@@ -509,14 +524,8 @@ def generate_strategy(state: GraphState) -> dict:
         goals=campaign_input.goals
     )
 
-    structured_llm = _get_llm().with_structured_output(CampaignStrategy)
-
-    @standard_retry
-    def _generate_strategy(prompt):
-        return structured_llm.invoke(prompt)
-
     try:
-        strategy = _generate_strategy(strategy_prompt)
+        strategy = _invoke_structured_llm(CampaignStrategy, strategy_prompt)
         return {"strategy": strategy}
     except Exception as e:
         logger.error(f"generate_strategy failed all retries: {e}. Executing fallback...")
@@ -545,14 +554,8 @@ def recommend_channels(state: GraphState) -> dict:
         timeline=campaign_input.timeline
     )
     
-    structured_llm = _get_llm().with_structured_output(ChannelRecommendation)
-    
-    @standard_retry
-    def _recommend_channels(prompt):
-        return structured_llm.invoke(prompt)
-
     try:
-        recommendation = _recommend_channels(channel_prompt)
+        recommendation = _invoke_structured_llm(ChannelRecommendation, channel_prompt)
         return {"channel_recommendation": recommendation}
     except Exception as e:
         logger.error(f"recommend_channels failed all retries: {e}. Executing fallback...")
@@ -578,14 +581,8 @@ def optimize_budget(state: GraphState) -> dict:
         channel_rationale=channel_rec.channel_rationale if channel_rec else 'N/A'
     )
     
-    structured_llm = _get_llm().with_structured_output(BudgetAllocation)
-    
-    @standard_retry
-    def _optimize_budget(prompt):
-        return structured_llm.invoke(prompt)
-
     try:
-        allocation = _optimize_budget(budget_prompt)
+        allocation = _invoke_structured_llm(BudgetAllocation, budget_prompt)
         return {"budget_allocation": allocation}
     except Exception as e:
         logger.error(f"optimize_budget failed all retries: {e}. Executing fallback...")
@@ -613,14 +610,8 @@ def assess_risks(state: GraphState) -> dict:
         past_campaign_insights=state.get("past_campaign_insights", "N/A")
     )
     
-    structured_llm = _get_llm().with_structured_output(RiskAssessment)
-    
-    @standard_retry
-    def _assess_risks(prompt):
-        return structured_llm.invoke(prompt)
-
     try:
-        assessment = _assess_risks(risk_prompt)
+        assessment = _invoke_structured_llm(RiskAssessment, risk_prompt)
         return {"risk_assessment": assessment}
     except Exception as e:
         logger.warning(f"assess_risks failed all retries: {e}. Executing fallback...")
@@ -646,69 +637,69 @@ def generate_fallback_report(state: GraphState) -> str:
     # Hardcoded markdown as a fallback if agent fails
     markdown_content = f"""# Marketing Campaign Strategy Report
 
-    **Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+**Generated:** {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-    ## Campaign Overview
+## Campaign Overview
 
-    | Aspect | Details |
-    |--------|---------|
-    | Campaign Type | {campaign_input.campaign_type} |
-    | Target Industry | {campaign_input.target_industry} |
-    | Budget | {campaign_input.budget} |
-    | Timeline | {campaign_input.timeline} |
-    | Goals | {campaign_input.goals} |
+| Aspect | Details |
+|--------|---------|
+| Campaign Type | {campaign_input.campaign_type} |
+| Target Industry | {campaign_input.target_industry} |
+| Budget | {campaign_input.budget} |
+| Timeline | {campaign_input.timeline} |
+| Goals | {campaign_input.goals} |
 
-    ---
+---
 
-    ## Data-Driven Insights
-    ### Historical Campaign Analysis
-    {insights}
-    
-    ### Market Trends
-    {trends}
+## Data-Driven Insights
+### Historical Campaign Analysis
+{insights}
 
-    ---
+### Market Trends
+{trends}
 
-    ## Recommended Strategy
-    ### Target Audience
-    {strategy.target_audience if strategy else 'N/A'}
-    ### Campaign Channels
-    {strategy.campaign_channels if strategy else 'N/A'}
-    ### Acquisition Cost Estimate
-    {strategy.acquisition_cost_estimate if strategy else 'N/A'}
-    ### Expected ROI
-    {strategy.expected_roi if strategy else 'N/A'}
+---
 
-    ---
+## Recommended Strategy
+### Target Audience
+{strategy.target_audience if strategy else 'N/A'}
+### Campaign Channels
+{strategy.campaign_channels if strategy else 'N/A'}
+### Acquisition Cost Estimate
+{strategy.acquisition_cost_estimate if strategy else 'N/A'}
+### Expected ROI
+{strategy.expected_roi if strategy else 'N/A'}
 
-    ## Channel Recommendations
-    ### Primary Channels
-    {channels.primary_channels if channels else 'N/A'}
-    ### Channel Rationale
-    {channels.channel_rationale if channels else 'N/A'}
-    ### Expected Reach & Engagement
-    {channels.expected_reach if channels else 'N/A'}
+---
 
-    ---
+## Channel Recommendations
+### Primary Channels
+{channels.primary_channels if channels else 'N/A'}
+### Channel Rationale
+{channels.channel_rationale if channels else 'N/A'}
+### Expected Reach & Engagement
+{channels.expected_reach if channels else 'N/A'}
 
-    ## Budget Optimization Plan
-    ### Channel Breakdown
-    {budget.channel_breakdown if budget else 'N/A'}
-    ### Timeline Phases
-    {budget.timeline_phases if budget else 'N/A'}
-    ### Contingency Plan
-    {budget.contingency_plan if budget else 'N/A'}
+---
 
-    ---
+## Budget Optimization Plan
+### Channel Breakdown
+{budget.channel_breakdown if budget else 'N/A'}
+### Timeline Phases
+{budget.timeline_phases if budget else 'N/A'}
+### Contingency Plan
+{budget.contingency_plan if budget else 'N/A'}
 
-    ## Risk Assessment & Mitigation
-    ### Identified Risks
-    {risks.identified_risks if risks else 'N/A'}
-    ### Mitigation Strategies
-    {risks.mitigation_strategies if risks else 'N/A'}
-    ### Success Metrics & KPIs
-    {risks.success_metrics if risks else 'N/A'}    
-    """
+---
+
+## Risk Assessment & Mitigation
+### Identified Risks
+{risks.identified_risks if risks else 'N/A'}
+### Mitigation Strategies
+{risks.mitigation_strategies if risks else 'N/A'}
+### Success Metrics & KPIs
+{risks.success_metrics if risks else 'N/A'}    
+"""
     return markdown_content
 
 # Helper node: Format the entire strategy into a polished markdown report
@@ -752,12 +743,8 @@ def format_markdown_report(state: GraphState) -> dict:
         success_metrics = risks.success_metrics if risks else 'N/A'
     )
     
-    @standard_retry
-    def _format_report(prompt):
-        return _get_llm().invoke(prompt)
-
     try:
-        formatted_md = _format_report(formatting_prompt)
+        formatted_md = _invoke_llm(formatting_prompt)
         content = formatted_md.content if hasattr(formatted_md, 'content') else formatted_md
         
         if isinstance(content, list) and content and isinstance(content[0], dict) and 'text' in content[0]:
@@ -813,7 +800,7 @@ def save_approved_markdown(state: GraphState) -> dict:
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(formatted_md)
         logger.info(f"Report successfully saved to: {filename}")
-        return {"formatted_markdown": filename}
+        return {"formatted_markdown": str(filename)}
     except Exception as e:
         logger.error(f"Error saving file: {e}")
         return {"formatted_markdown": ""}
