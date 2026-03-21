@@ -1,3 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marketing_agent"]
+
 [project]
 name = "marketingagent"
 version = "0.1.0"
@@ -200,3 +207,4 @@ disable = ["logging-format-interpolation", "logging-fstring-interpolation", "log
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+pythonpath = ["src"]
