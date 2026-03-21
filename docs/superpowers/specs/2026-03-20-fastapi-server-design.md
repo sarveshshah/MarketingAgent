@@ -26,8 +26,8 @@ Add a `server.py` FastAPI application that bridges the React frontend (Vite, por
 | File | Change |
 |---|---|
 | `server.py` | New — FastAPI app with two routes |
-| `frontend/src/App.jsx` | Update `handleGenerate` (streaming fetch) and `handleChatSubmit` (no change needed structurally) |
-| `start.sh` | Already correct — references `uvicorn server:app --port 8000 --reload` |
+| `frontend/src/App.jsx` | Update `handleGenerate` (streaming fetch); remap chat roles |
+| `start.sh` | Update `main:app` → `server:app` (line 29) |
 
 ---
 
@@ -38,9 +38,9 @@ React (port 5173)
   │
   ├─ POST /api/generate  ──►  server.py
   │                               │
-  │   SSE stream ◄────────────    ├─ build_graph().compile().stream()
-  │   {type: progress, node, msg} │   yields node completions
-  │   {type: done, report}        └─ extract formatted_markdown from final state
+  │   SSE stream ◄────────────    ├─ build_graph(include_human_approval=False).compile().stream()
+  │   {type: progress, node, msg} │   yields node completions via asyncio.Queue
+  │   {type: done, report}        └─ sentinel None signals queue exhaustion
   │
   └─ POST /api/chat      ──►  server.py
                                   │
@@ -62,13 +62,64 @@ React (port 5173)
 }
 ```
 
+FastAPI validates this against a Pydantic request model. Missing or invalid fields return HTTP 422. The 422 body is returned as a shaped error in the SSE stream — see Error Handling.
+
+> **Constraint:** `include_human_approval` MUST be `False`. When `True`, the `format_markdown_report` node writes the report to disk and stores only a file path in `formatted_markdown`. The SSE `done` event would then deliver a file path string to the frontend rather than markdown content. This is load-bearing; do not change it.
+
 ### Behavior
-1. Constructs a `CampaignInput` from the request body
+1. Constructs a `CampaignInput` from the validated request body
 2. Builds and compiles the graph with `include_human_approval=False`
-3. Calls `.stream({"campaign_input": campaign_input})` — LangGraph yields one dict per completed node
-4. For each node, yields an SSE event with a human-readable progress message
-5. On stream completion, extracts `formatted_markdown` and yields a `done` event
-6. On exception, yields an `error` event
+3. In a background thread (via `asyncio.to_thread`), calls `.stream({"campaign_input": campaign_input})`
+4. The background thread puts each node-completion dict onto an `asyncio.Queue`
+5. After the stream loop ends (or an exception is caught), the thread puts a sentinel `None` onto the queue
+6. The async SSE generator reads from the queue, yields formatted SSE lines, and breaks when it receives `None`
+7. For each node dict, yields a `progress` event (skipping nodes with no mapped message)
+8. After breaking on `None`, inspects the final accumulated state:
+   - If `formatted_markdown` is non-empty: yields `{type: "done", report: "..."}`
+   - If `formatted_markdown` is empty or missing: yields `{type: "error", message: "Pipeline completed but no report was produced."}`
+9. On exception inside the thread: puts `{"__error__": str(e)}` as the sentinel instead of `None`; the generator detects this and yields an `error` event
+
+### Thread–Queue Protocol (implementation detail)
+
+`asyncio.Queue` is not thread-safe. Items must be put onto it from the background thread using `loop.call_soon_threadsafe`, never `put_nowait` directly. Use `asyncio.get_running_loop()` (not the deprecated `asyncio.get_event_loop()`) to obtain the loop reference inside the async context before spawning the thread.
+
+```python
+async def event_generator(campaign_input):
+    queue = asyncio.Queue()
+    final_state = {}
+    loop = asyncio.get_running_loop()
+
+    def run_pipeline():
+        try:
+            for chunk in graph.stream({"campaign_input": campaign_input}):
+                final_state.update(chunk)
+                loop.call_soon_threadsafe(queue.put_nowait, chunk)   # thread-safe put
+            loop.call_soon_threadsafe(queue.put_nowait, None)        # sentinel: clean finish
+        except Exception as e:
+            loop.call_soon_threadsafe(queue.put_nowait, {"__error__": str(e)})
+
+    await asyncio.to_thread(run_pipeline)   # preferred over run_in_executor in Python 3.9+
+
+    while True:
+        item = await queue.get()
+        if item is None:                       # clean finish
+            report = final_state.get("formatted_markdown", "")
+            if report:
+                yield sse("done", {"report": report})
+            else:
+                yield sse("error", {"message": "Pipeline completed but no report was produced."})
+            break
+        if "__error__" in item:                # error finish
+            yield sse("error", {"message": item["__error__"]})
+            break
+        # normal node completion
+        node_name = next(iter(item))
+        msg = NODE_MESSAGES.get(node_name)
+        if msg:
+            yield sse("progress", {"node": node_name, "message": msg})
+```
+
+> **Note:** If a pipeline LLM call hangs indefinitely, the SSE connection will stay open until the client disconnects. A production deployment should wrap the pipeline with a timeout. For the current dev use case this is acceptable.
 
 ### SSE Event Shape
 ```
@@ -87,13 +138,11 @@ NODE_MESSAGES = {
     "recommend_channels":       "Recommending channels…",
     "optimize_budget":          "Optimizing budget…",
     "assess_risks":             "Assessing risks…",
-    "wait_for_budget":          None,  # internal node, skip
+    "wait_for_budget":          None,   # internal fan-in node, skip silently
     "format_markdown_report":   "Formatting report…",
 }
+# Unknown node keys not in this map are also skipped silently — not errored.
 ```
-
-### Implementation Note
-LangGraph's `.stream()` is synchronous. It must be run in a thread pool (`asyncio.to_thread` or `run_in_executor`) so it does not block the FastAPI async event loop. Progress events are queued via `asyncio.Queue` and consumed by the async SSE generator.
 
 ---
 
@@ -104,15 +153,20 @@ LangGraph's `.stream()` is synchronous. It must be run in a thread pool (`asynci
 {
   "current_report": "...full markdown...",
   "user_message": "What channels did the agent recommend?",
-  "chat_history": [{"role": "system", "content": "..."}]
+  "chat_history": [{"role": "user|assistant", "content": "..."}]
 }
 ```
 
+### Role Mapping
+The React frontend uses `role: "system"` for all bot messages. The server remaps any `role: "system"` entry in `chat_history` to `role: "assistant"` before constructing the OpenAI prompt, since OpenAI's Chat Completions API only allows `system` as the very first message (used for the context injection here).
+
 ### Behavior
-1. If `current_report` is empty, returns a friendly error message without calling the LLM
-2. Builds a prompt: system context (report) + last 6 messages from chat history + user question
-3. Calls `_invoke_llm()` (reuses the cached OpenAI client from `main.py`)
-4. Returns the answer; `report` is passed through unchanged
+1. If `current_report` is empty or missing, return immediately without calling the LLM
+2. Remap `role: "system"` → `role: "assistant"` in the full `chat_history`
+3. Take the **last 6 messages** from the remapped history (the new `user_message` is NOT included in this slice — it is appended separately in step 4)
+4. Construct prompt: system message (report as context) + 6-message history slice + the new user message
+5. Call `_invoke_llm()` (reuses the cached OpenAI client from `main.py`)
+6. Return the answer; `report` is passed through unchanged
 
 ### Response
 ```json
@@ -126,22 +180,20 @@ LangGraph's `.stream()` is synchronous. It must be run in a thread pool (`asynci
 
 ## Frontend Changes (`App.jsx`)
 
-### `handleGenerate`
-Replace `fetch(...).then(r => r.json())` with a streaming fetch:
-
+### `handleGenerate` — replace JSON fetch with SSE streaming fetch
 ```
-fetch /api/generate
+fetch POST /api/generate
   → response.body.getReader()
-  → decode chunks, split on "\n\n", parse "data: {...}"
-  → on {type: "progress"}: append message to chatHistory
-  → on {type: "done"}: setGeneratedReport(report), setIsGenerating(false)
-  → on {type: "error"}: append error to chatHistory, setIsGenerating(false)
+  → decode chunks (TextDecoder), split on "\n\n", filter "data: " prefix, JSON.parse
+  → on {type: "progress"}: append message to chatHistory as system message
+  → on {type: "done"}:     setGeneratedReport(report), setIsGenerating(false)
+  → on {type: "error"}:    append error message to chatHistory, setIsGenerating(false)
 ```
 
-Switch to "Refine" tab immediately on generate so the user sees live progress messages.
+Switch to "Refine" tab immediately so the user sees live progress messages streaming in.
 
-### `handleChatSubmit`
-No structural change — still calls `POST /api/chat` and reads JSON. The response `agent_message` is appended to chat history.
+### `handleChatSubmit` — no structural change
+Still calls `POST /api/chat` and reads JSON. The `agent_message` from the response is appended to chat history with `role: "system"` (matching the existing UI convention).
 
 ---
 
@@ -149,21 +201,27 @@ No structural change — still calls `POST /api/chat` and reads JSON. The respon
 
 | Scenario | Behavior |
 |---|---|
-| LangGraph node raises exception | Yield `{type: "error"}` SSE event; frontend shows it in chat |
-| No report when chat submitted | Return `{agent_message: "Please generate a report first."}` |
-| LLM call fails in chat | Return `{agent_message: "Error answering your question."}` |
-| CORS mismatch | Handled by FastAPI `CORSMiddleware` |
+| Missing/invalid request field | FastAPI returns 422; frontend `catch` block shows "Error connecting to the agent." |
+| LangGraph node raises exception | Thread puts `{__error__: msg}` sentinel; generator yields `{type: "error"}` SSE event |
+| Pipeline finishes with empty report | Generator yields `{type: "error", message: "Pipeline completed but no report was produced."}` |
+| No report when chat submitted | Return `{agent_message: "Please generate a report first.", report: ""}` |
+| LLM call fails in chat | Return `{agent_message: "Error answering your question.", report: current_report}` |
+| CORS mismatch | Handled by FastAPI `CORSMiddleware` for `http://localhost:5173` |
 
 ---
 
 ## Dependencies
 
-No new Python packages required. FastAPI and uvicorn are already available in the project's `.venv` (via `pyproject.toml`). The frontend requires no new npm packages.
+No new Python packages required. FastAPI and uvicorn are already in the `.venv`. The frontend requires no new npm packages.
 
 ---
 
-## Testing Considerations
+## Testing
 
-- `POST /api/generate` can be tested via `curl` with `--no-buffer` to observe SSE stream
-- `POST /api/chat` is a standard JSON endpoint, testable with any HTTP client
-- Both endpoints should be tested with the Vite frontend running at port 5173
+- **Happy path (generate):** `curl -N -X POST http://localhost:8000/api/generate -H "Content-Type: application/json" -d '{...}'` — verify SSE lines arrive incrementally, final line is `type: done` with non-empty `report`
+- **Stream terminates cleanly:** Confirm the SSE connection closes after the `done` event (not left hanging)
+- **Error path (generate):** Pass an invalid API key / force a node exception — verify `type: error` SSE event is emitted and stream closes
+- **Empty report guard:** Mock the pipeline to return `formatted_markdown: ""` — verify `type: error` is emitted, not `type: done` with empty report
+- **Chat happy path:** `POST /api/chat` with a populated `current_report` — verify a coherent answer is returned
+- **Chat no-report guard:** `POST /api/chat` with empty `current_report` — verify friendly error message, no LLM call
+- **Role remapping:** Send `chat_history` with `role: "system"` entries — verify the OpenAI call receives `role: "assistant"` for those entries
