@@ -31,3 +31,6 @@ frontend/node_modules/*
 .langchain.db
 
 .claude/
+.github/copilot-instructions.md
+docs/superpowers/plans/2026-03-20-fastapi-server.md
+docs/superpowers/specs/2026-03-20-fastapi-server-design.md

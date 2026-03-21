@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
 import remarkGfm from 'remark-gfm';
 import './App.css';
+import { buildExportHtml } from './exportPdfTemplate';
+
+/** Strip stray HTML tags the LLM sometimes embeds in markdown (e.g. <br> in table cells). */
+const sanitizeMarkdown = (md) =>
+  md.replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/?(?:div|span|p|b|i|u|font|center|style|script|iframe)[^>]*>/gi, '');
 
 const App = () => {
   const [theme, setTheme] = useState('light');
@@ -22,10 +29,26 @@ const App = () => {
     { role: 'system', content: 'Hello! Fill out the brief to generate a strategy report, or ask me questions to help refine your approach.' },
   ]);
 
+  const [isExporting, setIsExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const reportRef = useRef(null);
   const chatEndRef = useRef(null);
+  const exportMenuRef = useRef(null);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isGenerating]);
+
+  // Close export menu on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // ─── Theme tokens ─────────────────────────────────────────────────────
   const themes = {
@@ -110,6 +133,7 @@ const App = () => {
         buffer = lines.pop(); // keep incomplete trailing chunk
 
         for (const line of lines) {
+          if (!line.trim() || line.startsWith(':')) continue; // skip keepalive/comments
           const dataLine = line.split('\n').find(l => l.startsWith('data: '));
           if (!dataLine) continue;
 
@@ -123,7 +147,9 @@ const App = () => {
           if (event.type === 'progress') {
             setChatHistory(prev => [...prev, { role: 'system', content: event.message }]);
           } else if (event.type === 'done') {
-            setGeneratedReport(event.report);
+            const report = typeof event.report === 'string' ? event.report : String(event.report ?? '');
+            console.log('[SSE] done event received, report length:', report.length);
+            setGeneratedReport(report);
             setChatHistory(prev => [...prev, { role: 'system', content: 'Report ready. Ask me anything about it.' }]);
             return; // finally will clear isGenerating
           } else if (event.type === 'error') {
@@ -172,7 +198,7 @@ const App = () => {
     }
   };
 
-  const handleExport = () => {
+  const handleExportMarkdown = () => {
     if (!generatedReport) return;
     const blob = new Blob([generatedReport], { type: 'text/markdown' });
     const url = URL.createObjectURL(blob);
@@ -181,6 +207,45 @@ const App = () => {
     a.download = 'marketing-strategy.md';
     a.click();
     URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+  };
+
+  const handleExportPDF = async () => {
+    if (!reportRef.current || !generatedReport) return;
+    setIsExporting(true);
+    setShowExportMenu(false);
+    try {
+      const markdownHtml = reportRef.current.innerHTML;
+      const html = buildExportHtml(markdownHtml, {
+        campaignType: formData.campaign_type,
+        targetIndustry: formData.target_industry,
+        budget: formData.budget,
+      });
+
+      const res = await fetch('http://localhost:8000/api/export/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html, file_name: 'marketing-strategy.pdf' }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error: ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'marketing-strategy.pdf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      setChatHistory(prev => [...prev, { role: 'system', content: 'PDF export failed. Try exporting as Markdown instead.' }]);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -602,26 +667,105 @@ const App = () => {
               {generatedReport ? 'Strategy Report Ready' : 'Awaiting Brief'}
             </span>
           </div>
-          <button
-            onClick={handleExport}
-            disabled={!generatedReport}
-            style={{
-              background: generatedReport ? `${t.accent}15` : 'transparent',
-              border: `1px solid ${generatedReport ? t.accent : t.border}`,
-              borderRadius: '6px',
-              color: generatedReport ? t.accent : t.textMuted,
-              fontSize: '11px',
-              letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-              fontWeight: 600,
-              padding: '8px 16px',
-              cursor: generatedReport ? 'pointer' : 'not-allowed',
-              fontFamily: display,
-              transition: 'all 0.25s ease',
-            }}
-          >
-            Export
-          </button>
+          <div ref={exportMenuRef} style={{ position: 'relative' }}>
+            <button
+              onClick={() => generatedReport && setShowExportMenu(v => !v)}
+              disabled={!generatedReport || isExporting}
+              style={{
+                background: generatedReport ? `${t.accent}15` : 'transparent',
+                border: `1px solid ${generatedReport ? t.accent : t.border}`,
+                borderRadius: '6px',
+                color: generatedReport ? t.accent : t.textMuted,
+                fontSize: '11px',
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                fontWeight: 600,
+                padding: '8px 16px',
+                cursor: generatedReport && !isExporting ? 'pointer' : 'not-allowed',
+                fontFamily: display,
+                transition: 'all 0.25s ease',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+              }}
+            >
+              {isExporting ? 'Exporting…' : 'Export'}
+              {!isExporting && (
+                <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                  <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </button>
+            {showExportMenu && (
+              <div style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '6px',
+                background: t.bgPanel,
+                border: `1px solid ${t.border}`,
+                borderRadius: '8px',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                minWidth: '180px',
+                overflow: 'hidden',
+                zIndex: 50,
+              }}>
+                <button
+                  onClick={handleExportPDF}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    width: '100%',
+                    padding: '12px 16px',
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: `1px solid ${t.border}`,
+                    color: t.text,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    fontFamily: sans,
+                    textAlign: 'left',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = t.bgInput}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <polyline points="14 2 14 8 20 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  PDF Document
+                </button>
+                <button
+                  onClick={handleExportMarkdown}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '10px',
+                    width: '100%',
+                    padding: '12px 16px',
+                    background: 'transparent',
+                    border: 'none',
+                    color: t.text,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    fontFamily: sans,
+                    textAlign: 'left',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = t.bgInput}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 3v12M5 12l7 7 7-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M3 20h18" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                  Markdown File
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Report area */}
@@ -633,14 +777,15 @@ const App = () => {
         }}>
           {generatedReport ? (
             <div
-              className={theme === 'light' ? 'report-content-light' : 'report-content-dark'}
+              ref={reportRef}
+              className={`markdown-content ${theme === 'light' ? 'report-content-light' : 'report-content-dark'}`}
               style={{
                 maxWidth: '900px',
                 margin: '0 auto',
               }}
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]} className="markdown-content">
-                {generatedReport}
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                {typeof generatedReport === 'string' ? sanitizeMarkdown(generatedReport) : ''}
               </ReactMarkdown>
             </div>
           ) : (

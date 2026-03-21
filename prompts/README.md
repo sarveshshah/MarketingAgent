@@ -4,7 +4,7 @@ This directory contains all prompt templates used by the MarketingAgent system.
 
 ## How It Works
 
-Instead of hardcoding prompts with f-strings in the code, prompts are stored as template files with placeholders in the format `{variable_name}`. These are loaded and formatted at runtime using the `load_prompt()` function.
+Instead of hardcoding prompts with f-strings in the code, prompts are stored as template files with placeholders in the format `{variable_name}`. These are loaded and formatted at runtime using the `load_prompt()` function from `llm.py`.
 
 ### Benefits
 - ✅ Easy to version control and compare prompt changes
@@ -15,7 +15,7 @@ Instead of hardcoding prompts with f-strings in the code, prompts are stored as 
 ## Usage
 
 ```python
-from utils.prompt_loader import load_prompt
+from llm import load_prompt
 
 # Load and format a prompt template
 prompt = load_prompt(

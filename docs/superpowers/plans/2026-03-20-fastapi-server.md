@@ -1,12 +1,23 @@
 # FastAPI Server Implementation Plan
 
+> **Status:** Implemented. The server is live and all initial tasks are complete.
+>
+> **Post-implementation note (2026-03-21):** `main.py` has been split into focused modules. The import line referenced below (`from main import CampaignInput, build_graph, _get_llm`) is now:
+> ```python
+> from config import settings
+> from models import CampaignInput
+> from llm import _get_llm
+> from graph import build_graph
+> ```
+> Additionally, `server.py` now includes: rate limiting (slowapi), 4-layer security guardrails (InputValidator, InjectionDetector), CORS from env variable, and a `/health` endpoint.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `server.py` — a FastAPI app with a streaming SSE `/api/generate` endpoint and a Q&A `/api/chat` endpoint — to bridge the React frontend with the existing LangGraph pipeline in `main.py`.
+**Goal:** Add `server.py` — a FastAPI app with a streaming SSE `/api/generate` endpoint and a Q&A `/api/chat` endpoint — to bridge the React frontend with the existing LangGraph pipeline.
 
-**Architecture:** A single `server.py` imports `build_graph`, `CampaignInput`, and `_get_llm` directly from `main.py` with no changes to that file. The generate endpoint runs the LangGraph pipeline in a background thread, communicates node completions to the async SSE generator via a thread-safe `asyncio.Queue`, and streams `progress`/`done`/`error` SSE events to the browser. The chat endpoint makes a single LLM call with the report as context. The React `handleGenerate` function is updated to consume the SSE stream.
+**Architecture:** `server.py` imports from the split modules: `build_graph` from `graph.py`, `CampaignInput` from `models.py`, `_get_llm` from `llm.py`, and `settings` from `config.py`. The generate endpoint runs the LangGraph pipeline in a background thread, communicates node completions to the async SSE generator via a thread-safe `asyncio.Queue`, and streams `progress`/`done`/`error` SSE events to the browser. The chat endpoint makes a single LLM call with the report as context. The React `handleGenerate` function is updated to consume the SSE stream.
 
-**Tech Stack:** Python — FastAPI, uvicorn, asyncio (stdlib), pytest, httpx (test client). Frontend — React 18, native `fetch` ReadableStream API.
+**Tech Stack:** Python — FastAPI, uvicorn, asyncio (stdlib), slowapi (rate limiting), pytest, httpx (test client). Frontend — React 18, native `fetch` ReadableStream API.
 
 ---
 

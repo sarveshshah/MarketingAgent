@@ -1,14 +1,23 @@
 # FastAPI Server Design
 
 **Date:** 2026-03-20
-**Status:** Approved
+**Status:** Implemented
 **Branch:** react_ui_dynamic_feat
+
+> **Post-implementation note (2026-03-21):** `main.py` has been split into focused modules (`config.py`, `models.py`, `llm.py`, `agents.py`, `nodes.py`, `graph.py`). References to `from main import ...` below should read:
+> ```python
+> from config import settings
+> from models import CampaignInput
+> from llm import _get_llm
+> from graph import build_graph
+> ```
+> The server also gained: rate limiting (slowapi), 4-layer security guardrails, CORS from env variable, and a GET `/health` endpoint.
 
 ---
 
 ## Overview
 
-Add a `server.py` FastAPI application that bridges the React frontend (Vite, port 5173) with the existing LangGraph pipeline in `main.py`. The server exposes two endpoints and introduces no changes to `main.py`.
+Add a `server.py` FastAPI application that bridges the React frontend (Vite, port 5173) with the existing LangGraph pipeline. The server exposes two endpoints plus a health check.
 
 ---
 

@@ -1,7 +1,8 @@
 import streamlit as st
 from datetime import datetime
 from pathlib import Path
-from main import build_graph, CampaignInput
+from models import CampaignInput
+from graph import build_graph
 
 app = build_graph(include_human_approval=False).compile()
 

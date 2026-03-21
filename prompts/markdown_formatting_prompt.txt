@@ -59,6 +59,7 @@ Produce a single, elegant markdown report. Your output must be **ONLY the markdo
     *   Use tables for structured data to improve readability.
     *   Make sure you use escape characters when priting '$' signs for e.g. '\$' instead of just '$'. 
     *   **CRITICAL:** Never interleave markdown formatting (bold, italics) within flowing paragraph text. Keep paragraph text clean and unformatted unless it's a single key metric highlight (e.g., "Expected ROI: 5.0–5.1").
+    *   **CRITICAL:** Never use raw HTML tags such as `<br>`, `<p>`, `<div>`, `<span>`, or any other HTML elements. Use ONLY pure markdown syntax. For multi-point content in table cells, use semicolons or bullet characters (•) to separate items on a single line instead of `<br>` tags.
 
 ### Final Instruction:
 Review all the provided components and synthesize them into a single, polished, and professional report. Return **ONLY** the markdown. Do not include any other commentary.

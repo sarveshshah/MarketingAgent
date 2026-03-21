@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -14,7 +14,10 @@ from slowapi.util import get_remote_address
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from main import CampaignInput, build_graph, _get_llm, settings
+from config import settings
+from models import CampaignInput
+from llm import _get_llm
+from graph import build_graph
 from guardrails import InputValidator, InputValidationError, InjectionDetector, InjectionDetectedError
 
 logger = logging.getLogger("MarketingAgent")
@@ -100,6 +103,9 @@ class ChatRequest(BaseModel):
 _CHAT_HISTORY_WINDOW = 6  # keep last 3 turns (6 messages) for context
 
 
+_SSE_KEEPALIVE_INTERVAL = 15  # seconds between heartbeat comments
+
+
 async def _stream_pipeline(campaign_input: CampaignInput):
     """Async generator that runs the LangGraph pipeline in a thread and yields SSE events."""
     queue: asyncio.Queue = asyncio.Queue()
@@ -121,7 +127,12 @@ async def _stream_pipeline(campaign_input: CampaignInput):
     _task = asyncio.create_task(asyncio.to_thread(run_pipeline))  # noqa: F841 — kept alive to prevent GC
 
     while True:
-        item = await queue.get()
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_INTERVAL)
+        except asyncio.TimeoutError:
+            # No node finished yet — send an SSE comment to keep the connection alive
+            yield ": keepalive\n\n"
+            continue
 
         if item is None:                             # clean finish
             # Extract formatted_markdown from the format_markdown_report node's chunk
@@ -231,3 +242,50 @@ async def generate(request: Request, body: GenerateRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------------------
+# PDF Export — Playwright headless Chromium
+# ---------------------------------------------------------------------------
+
+_MAX_HTML_SIZE = 5 * 1024 * 1024  # 5 MB upper bound for the HTML payload
+
+
+class ExportPdfRequest(BaseModel):
+    html: str
+    file_name: str = "marketing-strategy.pdf"
+
+
+@app.post("/api/export/pdf")
+async def export_pdf(body: ExportPdfRequest):
+    if not body.html.strip():
+        return JSONResponse(status_code=400, content={"detail": "HTML content is required."})
+    if len(body.html) > _MAX_HTML_SIZE:
+        return JSONResponse(status_code=400, content={"detail": "HTML payload too large."})
+
+    try:
+        from playwright.async_api import async_playwright
+
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.set_content(body.html, wait_until="networkidle")
+            pdf_bytes = await page.pdf(
+                format="A4",
+                print_background=True,
+                margin={"top": "20mm", "bottom": "20mm", "left": "15mm", "right": "15mm"},
+            )
+            await browser.close()
+
+        safe_name = "".join(c for c in body.file_name if c.isalnum() or c in "-_. ").strip() or "export.pdf"
+        if not safe_name.endswith(".pdf"):
+            safe_name += ".pdf"
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        )
+    except Exception:
+        logger.exception("PDF export failed")
+        return JSONResponse(status_code=500, content={"detail": "PDF generation failed."})
