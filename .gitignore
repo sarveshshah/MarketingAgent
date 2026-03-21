@@ -1,30 +1,33 @@
+# Environments
 .env
 .venv/
+
+# IDE
 .vscode/
-.testcode/
-output.md
-.results/
-.old_files/
-utils/__pycache__/
 **/.DS_Store
-__pycache__/*
+
+# Python
+__pycache__/
+**/__pycache__/
+
+# Output and logs
 outputs/
 logs/
-old_files/discarded results/campaign_strategy_20260208_125436.md
-old_files/discarded results/campaign_strategy_20260208_125531.md
-old_files/discarded results/campaign_strategy_20260210_145631.md
-old_files/discarded results/campaign_strategy_20260210_150217.md
-old_files/discarded results/campaign_strategy_20260210_160219.md
-old_files/discarded results/campaign_strategy_20260210_163838.md
-old_files/discarded results/campaign_strategy_20260210_164222.md
-old_files/discarded results/campaign_strategy_20260210_183826.md
-old_files/discarded results/campaign_strategy_20260210_184306.md
-old_files/discarded results/campaign_strategy_20260210_184939.md
-old_files/discarded results/campaign_strategy_20260210_185920.md
-old_files/discarded results/campaign_strategy_20260210_191016.md
-old_files/discarded results/campaign_strategy_20260210_192004.md
-old_files/discarded results/campaign_strategy_20260211_120912.md
-old_files/testcode/app.ipynb
-old_files/testcode/dataanalysis.py
-old_files/testcode/learn.ipynb
-old_files/testcode/multiagent_framework.py
+output.md
+.results/
+
+# Old files and tests
+.old_files/
+.testcode/
+old_files/
+
+# Assets
+assets/Multi Agent Marketing Demo.mp4
+
+# Frontend
+frontend/node_modules/*
+
+# LangChain cache
+.langchain.db
+
+.claude/

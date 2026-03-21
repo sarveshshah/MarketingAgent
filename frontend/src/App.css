@@ -1,0 +1,28 @@
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Light mode report content */
+.report-content-light,
+.markdown-content {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Dark mode report content */
+.report-content-dark {
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+/* Remove default styles */
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Body styles */
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
