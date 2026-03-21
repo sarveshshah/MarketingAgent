@@ -11,8 +11,10 @@ __pycache__/
 **/__pycache__/
 
 # Output and logs
-outputs/
-logs/
+outputs/*
+!outputs/.gitkeep
+logs/*
+!logs/.gitkeep
 output.md
 .results/
 
