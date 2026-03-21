@@ -15,7 +15,6 @@ import pandas as pd
 from langgraph.graph import StateGraph, START, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain_experimental.tools import PythonREPLTool
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.globals import set_llm_cache
@@ -28,6 +27,8 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from typing_extensions import TypedDict
+
+from guardrails import SafePythonREPLTool, InjectionDetector
 
 # Load API keys from .env file immediately so they are available to third-party imports below
 from dotenv import load_dotenv
@@ -273,8 +274,8 @@ def collect_campaign_input(state: GraphState) -> dict:
 def data_analysis_agent(df: pd.DataFrame, analysis_prompt: str) -> str:
     """Data analysis agent that uses a Python REPL tool to analyze the dataframe and extract insights."""
     
-    # Create a Python REPL tool with the dataframe in its local scope
-    tools = [PythonREPLTool(locals={"df": df})]
+    # Create a sandboxed Python REPL tool with the dataframe in its local scope
+    tools = [SafePythonREPLTool(dataframe=df)]
 
     # Construct a prompt that includes the dataframe schema
     buffer = io.StringIO()
@@ -401,6 +402,11 @@ def search_agent(queries: list) -> str:
             all_results.append(f"--- ALL SEARCHES FAILED FOR QUERY: {query} ---")
             
     search_results_text = "\n\n".join(all_results)
+
+    # Scan search results for embedded injection payloads
+    _search_detector = InjectionDetector(use_llm=False)
+    search_results_text = _search_detector.scan_search_results(search_results_text)
+
     return search_results_text
 
 

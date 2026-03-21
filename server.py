@@ -12,8 +12,12 @@ from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from main import CampaignInput, build_graph, _get_llm
+from guardrails import InputValidator, InputValidationError, InjectionDetector, InjectionDetectedError
 
 logger = logging.getLogger("MarketingAgent")
+
+_input_validator = InputValidator()
+_injection_detector = InjectionDetector(use_llm=True)
 
 app = FastAPI()
 
@@ -46,6 +50,11 @@ NODE_MESSAGES: dict[str, str | None] = {
 def _sse(data: dict) -> str:
     """Format a dict as an SSE data line."""
     return f"data: {json.dumps(data)}\n\n"
+
+
+async def _sse_error(message: str):
+    """Yield a single SSE error event (async generator for StreamingResponse)."""
+    yield _sse({"type": "error", "message": message})
 
 
 class GenerateRequest(BaseModel):
@@ -119,6 +128,21 @@ async def chat(request: ChatRequest):
     if not request.current_report.strip():
         return {"report": "", "agent_message": "Please generate a report first."}
 
+    # Layer 1 — validate chat input
+    try:
+        clean = _input_validator.validate_chat(
+            user_message=request.user_message,
+            current_report=request.current_report,
+        )
+    except InputValidationError as exc:
+        return {"report": request.current_report, "agent_message": str(exc)}
+
+    # Layer 2 — injection scan
+    try:
+        _injection_detector.scan(clean["user_message"], field_name="user_message")
+    except InjectionDetectedError as exc:
+        return {"report": request.current_report, "agent_message": str(exc)}
+
     # Remap role=system → AIMessage (assistant). The frontend uses "system" for all
     # bot responses; OpenAI only allows "system" as the first message.
     def _to_lc_message(msg: ChatMessage):
@@ -147,7 +171,32 @@ async def chat(request: ChatRequest):
 
 @app.post("/api/generate")
 async def generate(request: GenerateRequest):
-    campaign_input = CampaignInput(**request.model_dump())
+    # Layer 1 — validate & sanitise
+    try:
+        clean = _input_validator.validate_campaign(
+            campaign_type=request.campaign_type,
+            target_industry=request.target_industry,
+            budget=request.budget,
+            timeline=request.timeline,
+            goals=request.goals,
+        )
+    except InputValidationError as exc:
+        return StreamingResponse(
+            _sse_error(str(exc)),
+            media_type="text/event-stream",
+        )
+
+    # Layer 2 — injection scan on free-text fields
+    try:
+        for fname in ("campaign_type", "target_industry", "goals", "timeline"):
+            _injection_detector.scan(clean[fname], field_name=fname)
+    except InjectionDetectedError as exc:
+        return StreamingResponse(
+            _sse_error(str(exc)),
+            media_type="text/event-stream",
+        )
+
+    campaign_input = CampaignInput(**clean)
     return StreamingResponse(
         _stream_pipeline(campaign_input),
         media_type="text/event-stream",
