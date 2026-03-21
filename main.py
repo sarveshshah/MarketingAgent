@@ -5,10 +5,10 @@ the interactive ``main()`` function.  All heavy lifting lives in the
 dedicated sub-modules (config, models, llm, agents, nodes, graph).
 """
 
-from config import settings, logger                          # noqa: F401
-from models import CampaignInput                             # noqa: F401
-from llm import _get_llm                                     # noqa: F401
-from graph import build_graph, run_campaign                  # noqa: F401
+from marketing_agent.config import settings, logger          # noqa: F401
+from marketing_agent.models import CampaignInput             # noqa: F401
+from marketing_agent.llm import _get_llm                     # noqa: F401
+from marketing_agent.graph import build_graph, run_campaign  # noqa: F401
 
 
 def main() -> None:
