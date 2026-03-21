@@ -13,7 +13,7 @@ const App = () => {
     campaign_type: 'Product Launch',
     target_industry: 'SaaS / Tech',
     budget: '$50,000',
-    timeline: 'Q3 2024',
+    timeline: 'Q3 2026',
     goals: 'Acquire 1,000 new users; 20% conversion rate.',
   });
 

@@ -7,6 +7,7 @@ import re
 from functools import lru_cache
 from typing import Annotated, Any, Optional
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pandas as pd
@@ -40,14 +41,16 @@ fast_retry = retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=
 logs_dir = Path("logs")
 logs_dir.mkdir(parents=True, exist_ok=True)
 
-log_filename = logs_dir / f"campaign_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_filename = logs_dir / "campaign.log"
 
 # Create logger
 logger = logging.getLogger("MarketingAgent")
 logger.setLevel(logging.INFO)
 
-# File handler with detailed format
-file_handler = logging.FileHandler(log_filename, encoding="utf-8")
+# File handler with rotation (10 MB max, keep 5 backups)
+file_handler = RotatingFileHandler(
+    log_filename, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
 file_handler.setLevel(logging.INFO)
 file_formatter = logging.Formatter(
     "%(asctime)s | %(levelname)-8s | %(message)s",
@@ -774,9 +777,16 @@ def human_approval_step(state: GraphState) -> dict:
     logger.info("=" * 70)
     logger.info(formatted_md[:2000])  # Preview first 2000 chars
     logger.info("\n... (partial report shown above) ...\n")
-    approval = input("\n✓ Save the report to markdown? (yes/no): ").strip().lower()
-    human_approved = approval in ['yes', 'y', 'true', '1']
-    
+
+    # Only prompt for approval in interactive (CLI) mode; auto-approve otherwise
+    import sys
+    if sys.stdin.isatty():
+        approval = input("\n✓ Save the report to markdown? (yes/no): ").strip().lower()
+        human_approved = approval in ['yes', 'y', 'true', '1']
+    else:
+        logger.info("Non-interactive mode detected — auto-approving report.")
+        human_approved = True
+
     return {"human_approval": human_approved}
 
 # Helper node: Save the markdown report to a file if approved by human, otherwise skip saving
