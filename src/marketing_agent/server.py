@@ -14,11 +14,11 @@ from slowapi.util import get_remote_address
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from config import settings
-from models import CampaignInput
-from llm import _get_llm
-from graph import build_graph
-from guardrails import InputValidator, InputValidationError, InjectionDetector, InjectionDetectedError
+from marketing_agent.config import settings
+from marketing_agent.models import CampaignInput
+from marketing_agent.llm import _get_llm
+from marketing_agent.graph import build_graph
+from marketing_agent.guardrails import InputValidator, InputValidationError, InjectionDetector, InjectionDetectedError
 
 logger = logging.getLogger("MarketingAgent")
 
