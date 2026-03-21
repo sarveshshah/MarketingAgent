@@ -33,6 +33,9 @@ fast_retry = retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=
 # Settings
 # ---------------------------------------------------------------------------
 
+_ROOT = Path(__file__).resolve().parents[2]
+
+
 class Settings(BaseSettings):
     """Centralised configuration — values are read from .env or environment variables."""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -50,8 +53,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
 
     # File paths — anchored to project root so they work regardless of CWD
-    data_path: Path = Path(__file__).parent / "data" / "marketing_campaign_dataset.csv"
-    outputs_dir: Path = Path(__file__).parent / "outputs"
+    data_path: Path = _ROOT / "data" / "marketing_campaign_dataset.csv"
+    outputs_dir: Path = _ROOT / "outputs"
     llm_cache_path: str = ".langchain.db"
 
 
@@ -60,7 +63,7 @@ settings = Settings()
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
-logs_dir = Path("logs")
+logs_dir = _ROOT / "logs"
 logs_dir.mkdir(parents=True, exist_ok=True)
 
 log_filename = logs_dir / "campaign.log"
