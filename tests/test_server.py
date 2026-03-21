@@ -161,3 +161,107 @@ async def test_generate_emits_error_when_report_is_empty():
     types = [e["type"] for e in events]
     assert "error" in types
     assert "done" not in types
+
+
+# ── chat tests ────────────────────────────────────────────────────────────────
+
+SAMPLE_REPORT = "# Marketing Strategy\n\n## Channels\n\n1. Email\n2. SEO\n3. Paid Social"
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_answer_for_valid_report():
+    """Chat returns an agent_message and echoes the report unchanged."""
+    from server import app
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.return_value.content = "The strategy recommends Email, SEO, and Paid Social."
+
+    with patch("server._get_llm", return_value=mock_llm):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/chat", json={
+                "current_report": SAMPLE_REPORT,
+                "user_message": "What channels were recommended?",
+                "chat_history": [],
+            })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["report"] == SAMPLE_REPORT
+    assert "Email" in body["agent_message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_friendly_error_when_no_report():
+    """If current_report is empty, return a friendly message without calling the LLM."""
+    from server import app
+
+    mock_llm = MagicMock()
+
+    with patch("server._get_llm", return_value=mock_llm):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/chat", json={
+                "current_report": "",
+                "user_message": "What channels?",
+                "chat_history": [],
+            })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "generate" in body["agent_message"].lower()
+    mock_llm.invoke.assert_not_called()    # LLM must NOT be called
+
+
+@pytest.mark.asyncio
+async def test_chat_remaps_system_role_to_assistant():
+    """role=system in chat_history must be sent to the LLM as AIMessage (assistant)."""
+    from server import app
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
+    captured_messages = []
+
+    def fake_invoke(messages):
+        captured_messages.extend(messages)
+        result = MagicMock()
+        result.content = "Answer."
+        return result
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.side_effect = fake_invoke
+
+    with patch("server._get_llm", return_value=mock_llm):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post("/api/chat", json={
+                "current_report": SAMPLE_REPORT,
+                "user_message": "Follow-up question",
+                "chat_history": [
+                    {"role": "user",   "content": "First question"},
+                    {"role": "system", "content": "Bot answer to first question"},
+                ],
+            })
+
+    # The system role entry from chat_history must arrive as AIMessage (assistant)
+    roles = [type(m).__name__ for m in captured_messages]
+    assert "AIMessage" in roles
+    assert roles.count("SystemMessage") == 1   # only our context injection — not from chat_history
+
+
+@pytest.mark.asyncio
+async def test_chat_returns_error_message_on_llm_failure():
+    """If the LLM raises, return a graceful error message — don't crash the server."""
+    from server import app
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.side_effect = RuntimeError("API error")
+
+    with patch("server._get_llm", return_value=mock_llm):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/chat", json={
+                "current_report": SAMPLE_REPORT,
+                "user_message": "What channels?",
+                "chat_history": [],
+            })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "error" in body["agent_message"].lower()
+    assert body["report"] == SAMPLE_REPORT

@@ -8,6 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
 from main import CampaignInput, build_graph, _get_llm
 
 app = FastAPI()
@@ -98,6 +100,36 @@ async def _stream_pipeline(campaign_input: CampaignInput):
         msg = NODE_MESSAGES.get(node_name)           # unknown nodes → None → skipped
         if msg:
             yield _sse({"type": "progress", "node": node_name, "message": msg})
+
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    if not request.current_report.strip():
+        return {"report": "", "agent_message": "Please generate a report first."}
+
+    # Remap role=system → AIMessage (assistant). The frontend uses "system" for all
+    # bot responses; OpenAI only allows "system" as the first message.
+    def _to_lc_message(msg: ChatMessage):
+        if msg.role == "user":
+            return HumanMessage(content=msg.content)
+        return AIMessage(content=msg.content)   # covers "system" and "assistant"
+
+    history_slice = [_to_lc_message(m) for m in request.chat_history[-6:]]
+
+    messages = [
+        SystemMessage(content=(
+            "You are a helpful assistant. Answer questions based solely on the "
+            f"following marketing strategy report.\n\n{request.current_report}"
+        )),
+        *history_slice,
+        HumanMessage(content=request.user_message),
+    ]
+
+    try:
+        result = _get_llm().invoke(messages)
+        return {"report": request.current_report, "agent_message": result.content}
+    except Exception:
+        return {"report": request.current_report, "agent_message": "Error answering your question."}
 
 
 @app.post("/api/generate")
