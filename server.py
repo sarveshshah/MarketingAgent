@@ -14,7 +14,7 @@ from slowapi.util import get_remote_address
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
-from main import CampaignInput, build_graph, _get_llm
+from main import CampaignInput, build_graph, _get_llm, settings
 from guardrails import InputValidator, InputValidationError, InjectionDetector, InjectionDetectedError
 
 logger = logging.getLogger("MarketingAgent")
@@ -50,7 +50,7 @@ async def health():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",")],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )

@@ -3,7 +3,6 @@
 from datetime import datetime
 import io
 import json
-import re
 from functools import lru_cache
 from typing import Annotated, Any, Optional
 import logging
@@ -87,6 +86,10 @@ class Settings(BaseSettings):
 
     # Retry / resilience
     max_retries: int = 2
+    llm_timeout: int = 120            # seconds — per-request timeout for LLM API calls
+
+    # CORS — comma-separated origins (consumed by server.py)
+    cors_origins: str = "http://localhost:5173"
 
     # File paths — anchored to main.py's directory so they work regardless of CWD
     data_path: Path = Path(__file__).parent / "data" / "marketing_campaign_dataset.csv"
@@ -110,7 +113,8 @@ def _get_llm() -> ChatOpenAI:
     return ChatOpenAI(
         model=settings.openai_model, 
         temperature=0, 
-        verbose=True
+        verbose=True,
+        timeout=settings.llm_timeout,
     )
 
 
@@ -120,7 +124,8 @@ def _get_analyst_llm() -> ChatGoogleGenerativeAI:
     return ChatGoogleGenerativeAI(
         model=settings.gemini_analyst_model, 
         temperature=0, 
-        verbose=True
+        verbose=True,
+        timeout=settings.llm_timeout,
     )
 
 
@@ -131,7 +136,8 @@ def _get_search_llm() -> Any:
     """
     try:
         llm = ChatGoogleGenerativeAI(
-            model=settings.gemini_model, temperature=0, verbose=True
+            model=settings.gemini_model, temperature=0, verbose=True,
+            timeout=settings.llm_timeout,
         )
         return llm.bind_tools([{"google_search": {}}])
     except Exception as e:
@@ -184,6 +190,24 @@ def _invoke_llm(prompt: str):
 def _invoke_structured_llm(model_cls: type, prompt: str):
     """Retry-wrapped structured-output LLM invocation."""
     return _get_structured_llm(model_cls).invoke(prompt)
+
+
+def _extract_text(content: Any) -> str:
+    """Normalise LLM response content to a plain string.
+
+    Handles two common shapes returned by different providers:
+      - ``str`` — OpenAI style, return as-is.
+      - ``list[dict]`` — Gemini style, join the ``"text"`` values.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = (
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+        return " ".join(parts).strip()
+    return str(content)
 
 
 # Input structure for the campaign details - this is what the user will provide at the start of the graph
@@ -365,14 +389,7 @@ def search_agent(queries: list) -> str:
     @fast_retry
     def _search_google(query: str) -> str:
         response = gemini_search_llm.invoke(f"Perform a comprehensive Google search and summarize the findings for: {query}")
-        content = response.content
-        # Gemini grounded responses can return a list of content blocks
-        if isinstance(content, list):
-            return " ".join(
-                block.get("text", "") if isinstance(block, dict) else str(block)
-                for block in content
-            ).strip()
-        return str(content)
+        return _extract_text(response.content)
 
     @standard_retry
     def _search_ddg(query: str) -> str:
@@ -435,18 +452,23 @@ def conduct_market_research(state: GraphState) -> dict:
     try:
         logger.info("Generating dynamic search queries...")
         queries_response = _invoke_llm(search_queries_prompt)
-        content = queries_response.content if hasattr(queries_response, 'content') else queries_response
+        content = _extract_text(
+            queries_response.content if hasattr(queries_response, 'content') else queries_response
+        )
         
-        # Try to parse the content as JSON using pydantic or json        
-        # Find json array in the string
-        json_match = re.search(r'\[(.*?)\]', str(content), re.DOTALL)
-        if json_match:
-            queries = json.loads(f"[{json_match.group(1)}]")
-            # Ensure it's a list of strings
-            if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
-                raise ValueError("Parsed JSON is not a list of strings")
-        else:
-            raise ValueError("No JSON array found in LLM response")
+        # Parse the JSON array from the LLM response.
+        # Try the full string first; if that fails, find the outermost [...] bracket pair.
+        try:
+            queries = json.loads(content)
+        except json.JSONDecodeError:
+            start = content.find("[")
+            end = content.rfind("]")
+            if start == -1 or end == -1 or end <= start:
+                raise ValueError("No JSON array found in LLM response")
+            queries = json.loads(content[start : end + 1])
+
+        if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
+            raise ValueError("Parsed JSON is not a list of strings")
             
     except Exception as e:
         logger.warning(f"Failed to dynamically generate search queries: {e}. Falling back to default queries.")
@@ -474,13 +496,9 @@ def conduct_market_research(state: GraphState) -> dict:
 
     try:
         response = _invoke_llm(market_research_prompt)
-        content = response.content if hasattr(response, 'content') else response
-
-        if isinstance(content, list) and content and isinstance(content[0], dict) and 'text' in content[0]:
-            compiled_trends = content[0]['text']
-        else:
-            compiled_trends = str(content)
-            
+        compiled_trends = _extract_text(
+            response.content if hasattr(response, 'content') else response
+        )
         logger.info("Successfully synthesized market trends.")
     except Exception as e:
         logger.error(f"Market research synthesis failed: {e}")
@@ -754,12 +772,9 @@ def format_markdown_report(state: GraphState) -> dict:
     
     try:
         formatted_md = _invoke_llm(formatting_prompt)
-        content = formatted_md.content if hasattr(formatted_md, 'content') else formatted_md
-        
-        if isinstance(content, list) and content and isinstance(content[0], dict) and 'text' in content[0]:
-            formatted_content = content[0]['text']
-        else:
-            formatted_content = str(content)
+        formatted_content = _extract_text(
+            formatted_md.content if hasattr(formatted_md, 'content') else formatted_md
+        )
 
         return {"formatted_markdown": formatted_content}
     except Exception as e:
