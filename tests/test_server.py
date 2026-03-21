@@ -176,7 +176,8 @@ async def test_chat_returns_answer_for_valid_report():
     mock_llm = MagicMock()
     mock_llm.invoke.return_value.content = "The strategy recommends Email, SEO, and Paid Social."
 
-    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm), \
+         patch("marketing_agent.server._injection_detector"):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
@@ -228,7 +229,8 @@ async def test_chat_remaps_system_role_to_assistant():
     mock_llm = MagicMock()
     mock_llm.invoke.side_effect = fake_invoke
 
-    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm), \
+         patch("marketing_agent.server._injection_detector"):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
@@ -253,7 +255,8 @@ async def test_chat_returns_error_message_on_llm_failure():
     mock_llm = MagicMock()
     mock_llm.invoke.side_effect = RuntimeError("API error")
 
-    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm), \
+         patch("marketing_agent.server._injection_detector"):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
