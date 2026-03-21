@@ -9,7 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.globals import set_llm_cache
 from langchain_community.cache import SQLiteCache
 
-from config import settings, logger, standard_retry
+from marketing_agent.config import settings, logger, standard_retry
 
 # ---------------------------------------------------------------------------
 # LLM response caching — must be set before any LLM client is instantiated.
@@ -70,7 +70,7 @@ def _get_search_llm() -> Any:
 @lru_cache(maxsize=32)
 def _read_template(prompt_name: str) -> str:
     """Read a template file from disk. Cached to avoid I/O on every call."""
-    prompts_dir = Path(__file__).parent / "prompts"
+    prompts_dir = Path(__file__).resolve().parents[2] / "prompts"
     prompt_file = prompts_dir / f"{prompt_name}.txt"
     if not prompt_file.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
