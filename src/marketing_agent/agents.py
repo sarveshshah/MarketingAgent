@@ -7,9 +7,9 @@ from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_community.tools import DuckDuckGoSearchRun
 
-from config import logger, standard_retry, fast_retry
-from llm import _get_analyst_llm, _get_search_llm, load_prompt, _extract_text
-from guardrails import SafePythonREPLTool, InjectionDetector
+from marketing_agent.config import logger, standard_retry, fast_retry
+from marketing_agent.llm import _get_analyst_llm, _get_search_llm, load_prompt, _extract_text
+from marketing_agent.guardrails import SafePythonREPLTool, InjectionDetector
 
 
 # ---------------------------------------------------------------------------
