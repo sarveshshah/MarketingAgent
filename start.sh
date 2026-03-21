@@ -26,7 +26,7 @@ cd "$SCRIPT_DIR"
 
 # ── FastAPI Backend (:8000) ────────────────────────────────────────────────────
 echo -e "${GOLD}▶ Starting FastAPI backend on port 8000...${RESET}"
-uv run uvicorn server:app --port 8000 --reload &
+uv run uvicorn marketing_agent.server:app --port 8000 --reload &
 API_PID=$!
 
 # Wait for backend to be ready
