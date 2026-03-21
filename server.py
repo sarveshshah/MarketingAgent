@@ -4,10 +4,13 @@ import json
 import logging
 from typing import Any, Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -19,7 +22,25 @@ logger = logging.getLogger("MarketingAgent")
 _input_validator = InputValidator()
 _injection_detector = InjectionDetector(use_llm=True)
 
+# ---------------------------------------------------------------------------
+# Rate limiter — keyed by client IP, in-memory storage (swap to Redis for
+# multi-process deployments by passing `storage_uri="redis://..."`).
+# ---------------------------------------------------------------------------
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI()
+app.state.limiter = limiter
+
+
+async def _rate_limit_handler(_request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """Return a clean 429 when a client exceeds the rate limit."""
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded: {exc.detail}"},
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
 
 @app.get("/health")
@@ -124,24 +145,31 @@ async def _stream_pipeline(campaign_input: CampaignInput):
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
-    if not request.current_report.strip():
+@limiter.limit("20/minute")
+async def chat(request: Request, body: ChatRequest):
+    if not body.current_report.strip():
         return {"report": "", "agent_message": "Please generate a report first."}
 
     # Layer 1 — validate chat input
     try:
         clean = _input_validator.validate_chat(
-            user_message=request.user_message,
-            current_report=request.current_report,
+            user_message=body.user_message,
+            current_report=body.current_report,
         )
     except InputValidationError as exc:
-        return {"report": request.current_report, "agent_message": str(exc)}
+        return {"report": body.current_report, "agent_message": str(exc)}
 
     # Layer 2 — injection scan
     try:
         _injection_detector.scan(clean["user_message"], field_name="user_message")
+
+        # The report and chat history are re-sent by the frontend on every call,
+        # so a tampered client could inject payloads into either one.
+        _injection_detector.scan(body.current_report, field_name="current_report")
+        for i, msg in enumerate(body.chat_history[-_CHAT_HISTORY_WINDOW:]):
+            _injection_detector.scan(msg.content, field_name=f"chat_history[{i}]")
     except InjectionDetectedError as exc:
-        return {"report": request.current_report, "agent_message": str(exc)}
+        return {"report": body.current_report, "agent_message": str(exc)}
 
     # Remap role=system → AIMessage (assistant). The frontend uses "system" for all
     # bot responses; OpenAI only allows "system" as the first message.
@@ -150,35 +178,36 @@ async def chat(request: ChatRequest):
             return HumanMessage(content=msg.content)
         return AIMessage(content=msg.content)   # covers "system" and "assistant"
 
-    history_slice = [_to_lc_message(m) for m in request.chat_history[-_CHAT_HISTORY_WINDOW:]]
+    history_slice = [_to_lc_message(m) for m in body.chat_history[-_CHAT_HISTORY_WINDOW:]]
 
     messages = [
         SystemMessage(content=(
             "You are a helpful assistant. Answer questions based solely on the "
-            f"following marketing strategy report.\n\n{request.current_report}"
+            f"following marketing strategy report.\n\n{body.current_report}"
         )),
         *history_slice,
-        HumanMessage(content=request.user_message),
+        HumanMessage(content=body.user_message),
     ]
 
     try:
         result = _get_llm().invoke(messages)
-        return {"report": request.current_report, "agent_message": result.content}
+        return {"report": body.current_report, "agent_message": result.content}
     except Exception:
         logger.exception("Chat LLM call failed")
-        return {"report": request.current_report, "agent_message": "Error answering your question."}
+        return {"report": body.current_report, "agent_message": "Error answering your question."}
 
 
 @app.post("/api/generate")
-async def generate(request: GenerateRequest):
+@limiter.limit("5/minute")
+async def generate(request: Request, body: GenerateRequest):
     # Layer 1 — validate & sanitise
     try:
         clean = _input_validator.validate_campaign(
-            campaign_type=request.campaign_type,
-            target_industry=request.target_industry,
-            budget=request.budget,
-            timeline=request.timeline,
-            goals=request.goals,
+            campaign_type=body.campaign_type,
+            target_industry=body.target_industry,
+            budget=body.budget,
+            timeline=body.timeline,
+            goals=body.goals,
         )
     except InputValidationError as exc:
         return StreamingResponse(

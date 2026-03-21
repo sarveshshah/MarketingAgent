@@ -96,7 +96,7 @@ def _llm_classify(text: str) -> bool:
         from langchain_google_genai import ChatGoogleGenerativeAI
         from langchain_core.messages import SystemMessage, HumanMessage
 
-        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+        llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash-lite", temperature=0)
         result = llm.invoke([
             SystemMessage(content=_CLASSIFIER_SYSTEM),
             HumanMessage(content=text),
@@ -133,7 +133,7 @@ class InjectionDetector:
 
     use_llm: bool = True
     _fields_requiring_llm: set[str] = field(
-        default_factory=lambda: {"goals", "user_message"}
+        default_factory=lambda: {"goals", "user_message", "current_report"}
     )
 
     def scan(self, text: str, *, field_name: str = "unknown") -> None:
