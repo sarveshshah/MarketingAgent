@@ -1,7 +1,7 @@
 # tests/test_server.py
-import json
-import pytest
-from httpx import AsyncClient, ASGITransport
+import json  # noqa: F401
+import pytest  # noqa: F401
+from httpx import AsyncClient, ASGITransport  # noqa: F401
 
 
 def test_server_imports():
