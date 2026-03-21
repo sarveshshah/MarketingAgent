@@ -2,8 +2,8 @@
 
 from langgraph.graph import StateGraph, START, END
 
-from models import CampaignInput, GraphState
-from nodes import (
+from marketing_agent.models import CampaignInput, GraphState
+from marketing_agent.nodes import (
     collect_campaign_input,
     analyze_past_campaigns,
     conduct_market_research,
