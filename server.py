@@ -74,7 +74,7 @@ async def _stream_pipeline(campaign_input: CampaignInput):
 
     # Schedule the thread concurrently — do NOT await before the while loop,
     # or the queue will only be drained AFTER the pipeline finishes (no streaming).
-    asyncio.create_task(asyncio.to_thread(run_pipeline))
+    _task = asyncio.create_task(asyncio.to_thread(run_pipeline))  # noqa: F841 — kept alive to prevent GC
 
     while True:
         item = await queue.get()

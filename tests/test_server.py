@@ -60,7 +60,7 @@ async def test_generate_streams_progress_messages():
                         events.append(json.loads(line[6:]))
 
     progress = [e for e in events if e["type"] == "progress"]
-    assert len(progress) >= 1
+    assert len(progress) == 8  # 8 nodes have messages; wait_for_budget (None) is excluded
     assert all("message" in e for e in progress)
     # wait_for_budget has None message — must NOT appear
     assert not any(e.get("node") == "wait_for_budget" for e in progress)
@@ -105,6 +105,42 @@ async def test_generate_emits_error_when_pipeline_raises():
     error_events = [e for e in events if e["type"] == "error"]
     assert len(error_events) == 1
     assert "LLM quota exceeded" in error_events[0]["message"]
+
+
+@pytest.mark.asyncio
+async def test_generate_emits_error_when_pipeline_raises_mid_iteration():
+    """Error event is emitted even when pipeline raises after partial chunks have been sent."""
+    from server import app
+
+    def failing_stream(state):
+        yield {"collect_campaign_input": {}}
+        yield {"analyze_past_campaigns": {"past_campaign_insights": "data"}}
+        raise RuntimeError("API quota exceeded mid-run")
+
+    mock_compiled = MagicMock()
+    mock_compiled.stream.side_effect = failing_stream
+    mock_builder = MagicMock()
+    mock_builder.compile.return_value = mock_compiled
+
+    with patch("server.build_graph", return_value=mock_builder):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
+                events = []
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        events.append(json.loads(line[6:]))
+
+    # Some progress events may have been emitted before the failure
+    progress = [e for e in events if e["type"] == "progress"]
+    assert len(progress) >= 1  # at least one node completed before failure
+
+    # Error event must still arrive and stream must close
+    error_events = [e for e in events if e["type"] == "error"]
+    assert len(error_events) == 1
+    assert "API quota exceeded mid-run" in error_events[0]["message"]
+
+    # No done event should appear
+    assert not any(e["type"] == "done" for e in events)
 
 
 @pytest.mark.asyncio
