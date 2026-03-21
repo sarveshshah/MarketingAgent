@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import './App.css';
@@ -139,7 +139,7 @@ const App = () => {
       setChatHistory(prev => [...prev, { role: 'system', content: 'Error connecting to the agent. Please ensure the backend is running.' }]);
     } finally {
       setIsGenerating(false);
-      reader?.cancel().catch(() => {}); // release the stream reader
+      reader?.cancel().catch(() => { }); // release the stream reader
     }
   };
 
