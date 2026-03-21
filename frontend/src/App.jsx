@@ -513,6 +513,7 @@ const App = () => {
                   }}
                 >
                   <div
+                    className={msg.role !== 'user' ? 'chat-markdown' : undefined}
                     style={{
                       maxWidth: '85%',
                       padding: '12px 14px',
@@ -524,7 +525,13 @@ const App = () => {
                       animation: `slideIn 0.3s ease-out`,
                     }}
                   >
-                    {msg.content}
+                    {msg.role === 'user' ? (
+                      msg.content
+                    ) : (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                        {msg.content}
+                      </ReactMarkdown>
+                    )}
                   </div>
                 </div>
               ))}
