@@ -6,8 +6,8 @@ from datetime import datetime
 
 import pandas as pd
 
-from config import settings, logger
-from models import (
+from marketing_agent.config import settings, logger
+from marketing_agent.models import (
     CampaignInput,
     CampaignStrategy,
     ChannelRecommendation,
@@ -15,14 +15,14 @@ from models import (
     RiskAssessment,
     GraphState,
 )
-from llm import (
+from marketing_agent.llm import (
     _get_llm,
     load_prompt,
     _invoke_llm,
     _invoke_structured_llm,
     _extract_text,
 )
-from agents import data_analysis_agent, search_agent
+from marketing_agent.agents import data_analysis_agent, search_agent
 
 
 # ---------------------------------------------------------------------------
