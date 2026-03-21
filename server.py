@@ -1,7 +1,8 @@
 # server.py
 import asyncio
 import json
-from typing import Any
+import logging
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +12,8 @@ from pydantic import BaseModel
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from main import CampaignInput, build_graph, _get_llm
+
+logger = logging.getLogger("MarketingAgent")
 
 app = FastAPI()
 
@@ -48,7 +51,7 @@ class GenerateRequest(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    role: str
+    role: Literal["user", "system", "assistant"]
     content: str
 
 
@@ -56,6 +59,9 @@ class ChatRequest(BaseModel):
     current_report: str
     user_message: str
     chat_history: list[ChatMessage]
+
+
+_CHAT_HISTORY_WINDOW = 6  # keep last 3 turns (6 messages) for context
 
 
 async def _stream_pipeline(campaign_input: CampaignInput):
@@ -114,7 +120,7 @@ async def chat(request: ChatRequest):
             return HumanMessage(content=msg.content)
         return AIMessage(content=msg.content)   # covers "system" and "assistant"
 
-    history_slice = [_to_lc_message(m) for m in request.chat_history[-6:]]
+    history_slice = [_to_lc_message(m) for m in request.chat_history[-_CHAT_HISTORY_WINDOW:]]
 
     messages = [
         SystemMessage(content=(
@@ -129,6 +135,7 @@ async def chat(request: ChatRequest):
         result = _get_llm().invoke(messages)
         return {"report": request.current_report, "agent_message": result.content}
     except Exception:
+        logger.exception("Chat LLM call failed")
         return {"report": request.current_report, "agent_message": "Error answering your question."}
 
 
