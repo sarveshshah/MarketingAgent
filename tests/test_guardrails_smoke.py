@@ -1,7 +1,7 @@
 """Quick smoke test for the guardrails module."""
-from guardrails import InputValidator, InputValidationError, SafePythonREPLTool, UnsafeCodeError
-from guardrails.safe_repl import validate_code
-from guardrails.injection_detector import InjectionDetector, InjectionDetectedError
+from marketing_agent.guardrails import InputValidator, InputValidationError, SafePythonREPLTool, UnsafeCodeError
+from marketing_agent.guardrails.safe_repl import validate_code
+from marketing_agent.guardrails.injection_detector import InjectionDetector, InjectionDetectedError
 import pandas as pd
 
 # Test Layer 1 — InputValidator

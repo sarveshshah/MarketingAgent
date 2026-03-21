@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 def test_server_imports():
     """Verify server.py can be imported and exposes a FastAPI app."""
-    from server import app
+    from marketing_agent.server import app
     assert app is not None
 
 
@@ -48,9 +48,9 @@ def _make_mock_graph(chunks):
 @pytest.mark.asyncio
 async def test_generate_streams_progress_messages():
     """Progress events are emitted for nodes that have a mapped message."""
-    from server import app
+    from marketing_agent.server import app
 
-    with patch("server.build_graph", return_value=_make_mock_graph(FAKE_PIPELINE_CHUNKS)):
+    with patch("marketing_agent.server.build_graph", return_value=_make_mock_graph(FAKE_PIPELINE_CHUNKS)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
                 assert response.status_code == 200
@@ -69,9 +69,9 @@ async def test_generate_streams_progress_messages():
 @pytest.mark.asyncio
 async def test_generate_emits_done_with_report():
     """Final event is type=done and contains non-empty report."""
-    from server import app
+    from marketing_agent.server import app
 
-    with patch("server.build_graph", return_value=_make_mock_graph(FAKE_PIPELINE_CHUNKS)):
+    with patch("marketing_agent.server.build_graph", return_value=_make_mock_graph(FAKE_PIPELINE_CHUNKS)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
                 events = []
@@ -87,14 +87,14 @@ async def test_generate_emits_done_with_report():
 @pytest.mark.asyncio
 async def test_generate_emits_error_when_pipeline_raises():
     """If the pipeline raises, an error SSE event is emitted and the stream closes."""
-    from server import app
+    from marketing_agent.server import app
 
     mock_compiled = MagicMock()
     mock_compiled.stream.side_effect = RuntimeError("LLM quota exceeded")
     mock_builder = MagicMock()
     mock_builder.compile.return_value = mock_compiled
 
-    with patch("server.build_graph", return_value=mock_builder):
+    with patch("marketing_agent.server.build_graph", return_value=mock_builder):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
                 events = []
@@ -110,7 +110,7 @@ async def test_generate_emits_error_when_pipeline_raises():
 @pytest.mark.asyncio
 async def test_generate_emits_error_when_pipeline_raises_mid_iteration():
     """Error event is emitted even when pipeline raises after partial chunks have been sent."""
-    from server import app
+    from marketing_agent.server import app
 
     def failing_stream(state):
         yield {"collect_campaign_input": {}}
@@ -122,7 +122,7 @@ async def test_generate_emits_error_when_pipeline_raises_mid_iteration():
     mock_builder = MagicMock()
     mock_builder.compile.return_value = mock_compiled
 
-    with patch("server.build_graph", return_value=mock_builder):
+    with patch("marketing_agent.server.build_graph", return_value=mock_builder):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
                 events = []
@@ -146,11 +146,11 @@ async def test_generate_emits_error_when_pipeline_raises_mid_iteration():
 @pytest.mark.asyncio
 async def test_generate_emits_error_when_report_is_empty():
     """If pipeline finishes but formatted_markdown is empty, emit error not done."""
-    from server import app
+    from marketing_agent.server import app
 
     empty_chunks = [{"format_markdown_report": {"formatted_markdown": ""}}]
 
-    with patch("server.build_graph", return_value=_make_mock_graph(empty_chunks)):
+    with patch("marketing_agent.server.build_graph", return_value=_make_mock_graph(empty_chunks)):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             async with client.stream("POST", "/api/generate", json=VALID_GENERATE_PAYLOAD) as response:
                 events = []
@@ -171,12 +171,12 @@ SAMPLE_REPORT = "# Marketing Strategy\n\n## Channels\n\n1. Email\n2. SEO\n3. Pai
 @pytest.mark.asyncio
 async def test_chat_returns_answer_for_valid_report():
     """Chat returns an agent_message and echoes the report unchanged."""
-    from server import app
+    from marketing_agent.server import app
 
     mock_llm = MagicMock()
     mock_llm.invoke.return_value.content = "The strategy recommends Email, SEO, and Paid Social."
 
-    with patch("server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
@@ -193,11 +193,11 @@ async def test_chat_returns_answer_for_valid_report():
 @pytest.mark.asyncio
 async def test_chat_returns_friendly_error_when_no_report():
     """If current_report is empty, return a friendly message without calling the LLM."""
-    from server import app
+    from marketing_agent.server import app
 
     mock_llm = MagicMock()
 
-    with patch("server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/chat", json={
                 "current_report": "",
@@ -214,7 +214,7 @@ async def test_chat_returns_friendly_error_when_no_report():
 @pytest.mark.asyncio
 async def test_chat_remaps_system_role_to_assistant():
     """role=system in chat_history must be sent to the LLM as AIMessage (assistant)."""
-    from server import app
+    from marketing_agent.server import app
     from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
     captured_messages = []
@@ -228,7 +228,7 @@ async def test_chat_remaps_system_role_to_assistant():
     mock_llm = MagicMock()
     mock_llm.invoke.side_effect = fake_invoke
 
-    with patch("server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
@@ -248,12 +248,12 @@ async def test_chat_remaps_system_role_to_assistant():
 @pytest.mark.asyncio
 async def test_chat_returns_error_message_on_llm_failure():
     """If the LLM raises, return a graceful error message — don't crash the server."""
-    from server import app
+    from marketing_agent.server import app
 
     mock_llm = MagicMock()
     mock_llm.invoke.side_effect = RuntimeError("API error")
 
-    with patch("server._get_llm", return_value=mock_llm):
+    with patch("marketing_agent.server._get_llm", return_value=mock_llm):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post("/api/chat", json={
                 "current_report": SAMPLE_REPORT,
