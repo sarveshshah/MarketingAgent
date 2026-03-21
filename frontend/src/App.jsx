@@ -58,6 +58,8 @@ const App = () => {
     setIsGenerating(true);
     setActiveTab('chat'); // show Refine tab so user sees live progress
 
+    let reader = null;
+
     try {
       const response = await fetch('http://localhost:8000/api/generate', {
         method: 'POST',
@@ -69,15 +71,22 @@ const App = () => {
         throw new Error(`Server error: ${response.status}`);
       }
 
-      const reader = response.body.getReader();
+      if (!response.body) {
+        throw new Error('Server returned no response body');
+      }
+
+      reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
+        // Flush the decoder's internal buffer on stream end
+        buffer += done
+          ? decoder.decode()
+          : decoder.decode(value, { stream: true });
+
         const lines = buffer.split('\n\n');
         buffer = lines.pop(); // keep incomplete trailing chunk
 
@@ -85,27 +94,33 @@ const App = () => {
           const dataLine = line.split('\n').find(l => l.startsWith('data: '));
           if (!dataLine) continue;
 
-          const event = JSON.parse(dataLine.slice(6));
+          let event;
+          try {
+            event = JSON.parse(dataLine.slice(6));
+          } catch {
+            continue; // malformed line — skip and keep reading
+          }
 
           if (event.type === 'progress') {
             setChatHistory(prev => [...prev, { role: 'system', content: event.message }]);
           } else if (event.type === 'done') {
             setGeneratedReport(event.report);
             setChatHistory(prev => [...prev, { role: 'system', content: 'Report ready. Ask me anything about it.' }]);
-            setIsGenerating(false);
-            return;
+            return; // finally will clear isGenerating
           } else if (event.type === 'error') {
             setChatHistory(prev => [...prev, { role: 'system', content: `Error: ${event.message}` }]);
-            setIsGenerating(false);
-            return;
+            return; // finally will clear isGenerating
           }
         }
+
+        if (done) break;
       }
     } catch (error) {
       console.error('Error:', error);
       setChatHistory(prev => [...prev, { role: 'system', content: 'Error connecting to the agent. Please ensure the backend is running.' }]);
     } finally {
       setIsGenerating(false);
+      reader?.cancel().catch(() => {}); // release the stream reader
     }
   };
 
