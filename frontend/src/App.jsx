@@ -1,42 +1,54 @@
-import React, { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FileText, Settings, Send, Play, RefreshCw, Download } from 'lucide-react';
 
-/**
- * App Component
- * 
- * This component serves as the frontend for the Marketing Strategy Generator.
- * It maps user inputs to the placeholders defined in 'markdown_formatting_prompt.txt'.
- */
+// ─── Design Tokens ────────────────────────────────────────────────────────────
+const T = {
+  bg:        '#0C0C11',
+  bgPanel:   '#0F0F15',
+  bgSurface: 'rgba(255,255,255,0.04)',
+  gold:      '#C9A84C',
+  goldDim:   'rgba(201,168,76,0.25)',
+  goldFaint: 'rgba(201,168,76,0.08)',
+  cream:     '#F8F4EE',
+  creamPaper:'#FDFAF4',
+  ink:       '#1C1A16',
+  inkLight:  '#2E2B24',
+  textPrimary:   '#F0EBE1',
+  textSecondary: 'rgba(240,235,225,0.45)',
+  textMuted:     'rgba(240,235,225,0.22)',
+  border:    'rgba(255,255,255,0.07)',
+  borderGold:'rgba(201,168,76,0.18)',
+};
 
+const serif  = "'Cormorant Garamond', Georgia, serif";
+const sans   = "'DM Sans', system-ui, sans-serif";
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 const App = () => {
-  // ---------------------------------------------------------------------------
-  // State Management
-  // ---------------------------------------------------------------------------
-  const [activeTab, setActiveTab] = useState('form'); // 'form' or 'chat'
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [activeTab, setActiveTab]         = useState('form');
+  const [isGenerating, setIsGenerating]   = useState(false);
   const [generatedReport, setGeneratedReport] = useState('');
-  
-  // Form State - Maps directly to placeholders in your prompt file
+
   const [formData, setFormData] = useState({
-    campaign_type: 'Product Launch',
+    campaign_type:   'Product Launch',
     target_industry: 'SaaS / Tech',
-    budget: '$50,000',
-    timeline: 'Q3 2024',
-    goals: 'Acquire 1,000 new users; 20% conversion rate.'
+    budget:          '$50,000',
+    timeline:        'Q3 2024',
+    goals:           'Acquire 1,000 new users; 20% conversion rate.',
   });
 
-  // Chat State
   const [chatInput, setChatInput] = useState('');
   const [chatHistory, setChatHistory] = useState([
-    { role: 'system', content: 'Hello! Fill out the form to generate a report, or ask me questions to help refine your strategy.' }
+    { role: 'system', content: 'Hello! Fill out the brief to generate a strategy report, or ask me questions to help refine your approach.' },
   ]);
 
-  // ---------------------------------------------------------------------------
-  // Handlers
-  // ---------------------------------------------------------------------------
-  
+  const chatEndRef = useRef(null);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatHistory, isGenerating]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
@@ -44,20 +56,51 @@ const App = () => {
 
   const handleGenerate = async () => {
     setIsGenerating(true);
-    setActiveTab('chat'); // Switch to chat to show progress or results
-    
+    setActiveTab('chat'); // show Refine tab so user sees live progress
+
     try {
       const response = await fetch('http://localhost:8000/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
       });
-      
-      if (!response.ok) throw new Error('Failed to generate report');
-      
-      const data = await response.json();
-      setGeneratedReport(data.report);
-      setChatHistory(prev => [...prev, { role: 'system', content: 'Report generated successfully! You can now ask me to refine specific sections.' }]);
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop(); // keep incomplete trailing chunk
+
+        for (const line of lines) {
+          const dataLine = line.split('\n').find(l => l.startsWith('data: '));
+          if (!dataLine) continue;
+
+          const event = JSON.parse(dataLine.slice(6));
+
+          if (event.type === 'progress') {
+            setChatHistory(prev => [...prev, { role: 'system', content: event.message }]);
+          } else if (event.type === 'done') {
+            setGeneratedReport(event.report);
+            setChatHistory(prev => [...prev, { role: 'system', content: 'Report ready. Ask me anything about it.' }]);
+            setIsGenerating(false);
+            return;
+          } else if (event.type === 'error') {
+            setChatHistory(prev => [...prev, { role: 'system', content: `Error: ${event.message}` }]);
+            setIsGenerating(false);
+            return;
+          }
+        }
+      }
     } catch (error) {
       console.error('Error:', error);
       setChatHistory(prev => [...prev, { role: 'system', content: 'Error connecting to the agent. Please ensure the backend is running.' }]);
@@ -69,12 +112,10 @@ const App = () => {
   const handleChatSubmit = async (e) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-
     const userMsg = { role: 'user', content: chatInput };
     setChatHistory(prev => [...prev, userMsg]);
     setChatInput('');
     setIsGenerating(true);
-
     try {
       const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
@@ -82,16 +123,13 @@ const App = () => {
         body: JSON.stringify({
           current_report: generatedReport,
           user_message: userMsg.content,
-          chat_history: chatHistory
+          chat_history: chatHistory,
         }),
       });
-
       if (!response.ok) throw new Error('Failed to update report');
-
       const data = await response.json();
       setGeneratedReport(data.report);
-      const agentMsg = { role: 'system', content: data.agent_message };
-      setChatHistory(prev => [...prev, agentMsg]);
+      setChatHistory(prev => [...prev, { role: 'system', content: data.agent_message }]);
     } catch (error) {
       console.error('Error:', error);
       setChatHistory(prev => [...prev, { role: 'system', content: 'Error updating the report.' }]);
@@ -100,174 +138,418 @@ const App = () => {
     }
   };
 
-  // ---------------------------------------------------------------------------
-  // Render Helpers
-  // ---------------------------------------------------------------------------
+  const handleExport = () => {
+    if (!generatedReport) return;
+    const blob = new Blob([generatedReport], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'marketing-strategy.md';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
-  const renderInputField = (label, name, type = "text") => (
-    <div className="mb-4">
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      {type === "textarea" ? (
-        <textarea
-          name={name}
-          value={formData[name]}
-          onChange={handleInputChange}
-          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          rows={3}
-        />
-      ) : (
-        <input
-          type="text"
-          name={name}
-          value={formData[name]}
-          onChange={handleInputChange}
-          className="w-full p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        />
-      )}
-    </div>
-  );
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen bg-gray-50 font-sans">
-      {/* LEFT PANEL: Controls & Chat */}
-      <div className="w-1/3 min-w-[400px] flex flex-col border-r border-gray-200 bg-white shadow-sm">
-        
+    <div style={{ display: 'flex', height: '100vh', background: T.bg, fontFamily: sans, overflow: 'hidden' }}>
+
+      {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
+      <div style={{
+        width: '380px', minWidth: '380px',
+        display: 'flex', flexDirection: 'column',
+        background: T.bgPanel,
+        borderRight: `1px solid ${T.border}`,
+        position: 'relative',
+      }}>
+        {/* Gold top line */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: '1px',
+          background: `linear-gradient(90deg, transparent 0%, ${T.gold} 50%, transparent 100%)`,
+        }} />
+
         {/* Header */}
-        <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
-          <h1 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-            <Settings className="w-5 h-5 text-blue-600" />
-            Marketing Agent
+        <div style={{ padding: '36px 32px 0' }}>
+          <div style={{ fontSize: '10px', letterSpacing: '0.32em', color: T.gold, textTransform: 'uppercase', fontWeight: 500, marginBottom: '10px' }}>
+            AI-Powered
+          </div>
+          <h1 style={{ fontFamily: serif, fontSize: '30px', fontWeight: 400, color: T.textPrimary, lineHeight: 1.15, margin: '0 0 28px', letterSpacing: '0.01em' }}>
+            Marketing<br /><em style={{ fontWeight: 300 }}>Intelligence</em>
           </h1>
-          <div className="flex bg-gray-200 rounded-lg p-1">
-            <button
-              onClick={() => setActiveTab('form')}
-              className={`px-3 py-1 text-sm rounded-md transition-all ${activeTab === 'form' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
-            >
-              Data Input
-            </button>
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`px-3 py-1 text-sm rounded-md transition-all ${activeTab === 'chat' ? 'bg-white shadow text-blue-600 font-medium' : 'text-gray-600 hover:text-gray-900'}`}
-            >
-              Assistant
-            </button>
+
+          {/* Tabs */}
+          <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}` }}>
+            {[['form', 'Brief'], ['chat', 'Refine']].map(([key, label]) => (
+              <button key={key} onClick={() => setActiveTab(key)} style={{
+                flex: 1, padding: '8px 0 13px',
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 500,
+                color: activeTab === key ? T.gold : T.textSecondary,
+                borderBottom: `1px solid ${activeTab === key ? T.gold : 'transparent'}`,
+                marginBottom: '-1px',
+                transition: 'color 0.2s, border-color 0.2s',
+                fontFamily: sans,
+              }}>
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto p-4">
-          
+        {/* Scrollable content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
+
           {/* FORM VIEW */}
           {activeTab === 'form' && (
-            <div className="space-y-6">
-              <div className="bg-blue-50 p-3 rounded-md border border-blue-100 text-sm text-blue-800 mb-4">
-                Fill in the raw components below. The agent will synthesize this into a professional report.
-              </div>
+            <div>
+              <p style={{ fontSize: '13px', color: T.textSecondary, lineHeight: 1.7, marginBottom: '32px' }}>
+                Define your campaign parameters. The agent synthesises them into a comprehensive strategy report.
+              </p>
 
-              <section>
-                <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2"><FileText className="w-4 h-4"/> 1. Campaign Overview</h3>
-                {renderInputField("Campaign Type", "campaign_type")}
-                {renderInputField("Target Industry", "target_industry")}
-                {renderInputField("Budget", "budget")}
-                {renderInputField("Timeline", "timeline")}
-                {renderInputField("Goals", "goals", "textarea")}
-              </section>
+              {[
+                { label: 'Campaign Type',   name: 'campaign_type',   type: 'text'     },
+                { label: 'Target Industry', name: 'target_industry', type: 'text'     },
+                { label: 'Budget',          name: 'budget',          type: 'text'     },
+                { label: 'Timeline',        name: 'timeline',        type: 'text'     },
+                { label: 'Goals & KPIs',    name: 'goals',           type: 'textarea' },
+              ].map(field => (
+                <div key={field.name} style={{ marginBottom: '28px' }}>
+                  <label style={{
+                    display: 'block', fontSize: '9px', letterSpacing: '0.28em',
+                    textTransform: 'uppercase', color: T.gold, fontWeight: 500, marginBottom: '10px',
+                  }}>
+                    {field.label}
+                  </label>
+                  {field.type === 'textarea' ? (
+                    <textarea name={field.name} value={formData[field.name]} onChange={handleInputChange} rows={3}
+                      style={{
+                        width: '100%', background: T.bgSurface, border: 'none',
+                        borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
+                        fontSize: '14px', padding: '6px 0', outline: 'none',
+                        fontFamily: sans, resize: 'none', lineHeight: 1.65, boxSizing: 'border-box',
+                      }}
+                    />
+                  ) : (
+                    <input type="text" name={field.name} value={formData[field.name]} onChange={handleInputChange}
+                      style={{
+                        width: '100%', background: 'transparent', border: 'none',
+                        borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
+                        fontSize: '14px', padding: '6px 0', outline: 'none',
+                        fontFamily: sans, boxSizing: 'border-box',
+                      }}
+                    />
+                  )}
+                </div>
+              ))}
 
-              <button
-                onClick={handleGenerate}
-                disabled={isGenerating}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center gap-2 transition-colors shadow-sm"
-              >
-                {isGenerating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
-                Generate Strategy Report
+              {/* Divider */}
+              <div style={{ borderTop: `1px solid ${T.border}`, margin: '8px 0 24px' }} />
+
+              <button onClick={handleGenerate} disabled={isGenerating} style={{
+                width: '100%', padding: '14px 24px',
+                background: isGenerating ? T.goldDim : T.gold,
+                border: 'none',
+                color: isGenerating ? 'rgba(13,13,18,0.4)' : T.ink,
+                fontSize: '10px', letterSpacing: '0.28em', textTransform: 'uppercase', fontWeight: 600,
+                cursor: isGenerating ? 'not-allowed' : 'pointer',
+                fontFamily: sans, transition: 'background 0.2s, color 0.2s',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+              }}>
+                {isGenerating ? (
+                  <>
+                    <span style={{ display: 'inline-flex', gap: '3px', alignItems: 'center' }}>
+                      {[0, 1, 2].map(i => (
+                        <span key={i} style={{
+                          width: '3px', height: '3px', borderRadius: '50%', background: T.gold,
+                          animation: `dot-pulse 1.2s ease-in-out ${i * 0.18}s infinite`,
+                          display: 'inline-block',
+                        }} />
+                      ))}
+                    </span>
+                    Generating
+                  </>
+                ) : 'Generate Strategy'}
               </button>
             </div>
           )}
 
           {/* CHAT VIEW */}
           {activeTab === 'chat' && (
-            <div className="flex flex-col h-full">
-              <div className="flex-1 space-y-4 mb-4">
-                {chatHistory.map((msg, idx) => (
-                  <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] p-3 rounded-lg text-sm ${
-                      msg.role === 'user' 
-                        ? 'bg-blue-600 text-white rounded-br-none' 
-                        : 'bg-gray-100 text-gray-800 rounded-bl-none border border-gray-200'
-                    }`}>
-                      {msg.content}
-                    </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {chatHistory.map((msg, idx) => (
+                <div key={idx} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                  <div style={{
+                    maxWidth: '88%', padding: '10px 14px', fontSize: '13px', lineHeight: 1.65,
+                    background: msg.role === 'user' ? T.goldFaint : T.bgSurface,
+                    color: msg.role === 'user' ? '#E6D08A' : T.textSecondary,
+                    borderRight: msg.role === 'user' ? `2px solid ${T.gold}` : 'none',
+                    borderLeft: msg.role === 'system' ? `2px solid ${T.goldDim}` : 'none',
+                  }}>
+                    {msg.content}
                   </div>
-                ))}
-                {isGenerating && (
-                  <div className="flex justify-start">
-                    <div className="bg-gray-100 p-3 rounded-lg rounded-bl-none text-sm text-gray-500 italic flex items-center gap-2">
-                      <RefreshCw className="w-3 h-3 animate-spin" /> Agent is thinking...
-                    </div>
+                </div>
+              ))}
+              {isGenerating && (
+                <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+                  <div style={{
+                    padding: '12px 16px', background: T.bgSurface,
+                    borderLeft: `2px solid ${T.goldDim}`,
+                    display: 'flex', gap: '5px', alignItems: 'center',
+                  }}>
+                    {[0, 1, 2].map(i => (
+                      <span key={i} style={{
+                        width: '4px', height: '4px', borderRadius: '50%', background: T.gold,
+                        display: 'inline-block',
+                        animation: `dot-pulse 1.2s ease-in-out ${i * 0.18}s infinite`,
+                      }} />
+                    ))}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
             </div>
           )}
         </div>
 
-        {/* Chat Input Area (Always visible if in Chat mode) */}
+        {/* Chat input */}
         {activeTab === 'chat' && (
-          <div className="p-4 border-t border-gray-200 bg-white">
-            <form onSubmit={handleChatSubmit} className="flex gap-2">
+          <div style={{ padding: '16px 32px 28px', borderTop: `1px solid ${T.border}` }}>
+            <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
               <input
-                type="text"
-                value={chatInput}
+                type="text" value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask to refine the report (e.g., 'Make the tone more formal')..."
-                className="flex-1 p-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                placeholder="Refine the strategy…"
+                style={{
+                  flex: 1, background: 'transparent', border: 'none',
+                  borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
+                  fontSize: '13px', padding: '6px 0', outline: 'none', fontFamily: sans,
+                }}
               />
-              <button 
-                type="submit"
-                disabled={isGenerating || !chatInput.trim()}
-                className="p-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Send className="w-4 h-4" />
+              <button type="submit" disabled={isGenerating || !chatInput.trim()} style={{
+                width: '34px', height: '34px', flexShrink: 0,
+                background: chatInput.trim() ? T.gold : T.goldDim,
+                border: 'none', cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.2s',
+              }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path d="M22 2L11 13" stroke={T.ink} strokeWidth="2.2" strokeLinecap="round"/>
+                  <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke={T.ink} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
               </button>
             </form>
           </div>
         )}
       </div>
 
-      {/* RIGHT PANEL: Report Preview */}
-      <div className="flex-1 flex flex-col bg-gray-100 h-full overflow-hidden">
+      {/* ── RIGHT PANEL ──────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#EEEAE0', overflow: 'hidden' }}>
+
         {/* Toolbar */}
-        <div className="h-14 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm z-10">
-          <h2 className="font-semibold text-gray-700 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-gray-500" />
-            Report Preview
-          </h2>
-          <div className="flex gap-2">
-             <button className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-md border border-gray-300 transition-colors">
-              <Download className="w-4 h-4" /> Export Markdown
-            </button>
+        <div style={{
+          height: '58px', background: T.bgPanel,
+          borderBottom: `1px solid ${T.border}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '0 36px', flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '6px', height: '6px', borderRadius: '50%',
+              background: generatedReport ? T.gold : T.textMuted,
+              boxShadow: generatedReport ? `0 0 8px ${T.gold}` : 'none',
+              transition: 'all 0.4s ease',
+            }} />
+            <span style={{
+              fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 500,
+              color: generatedReport ? 'rgba(240,235,225,0.6)' : T.textMuted,
+              transition: 'color 0.3s',
+            }}>
+              {generatedReport ? 'Strategy Report' : 'Awaiting Brief'}
+            </span>
           </div>
+          <button onClick={handleExport} disabled={!generatedReport} style={{
+            background: 'none', border: `1px solid ${generatedReport ? T.goldDim : 'rgba(255,255,255,0.06)'}`,
+            color: generatedReport ? 'rgba(201,168,76,0.7)' : T.textMuted,
+            fontSize: '9px', letterSpacing: '0.22em', textTransform: 'uppercase',
+            padding: '6px 18px', cursor: generatedReport ? 'pointer' : 'not-allowed',
+            fontFamily: sans, fontWeight: 500,
+            transition: 'all 0.2s',
+          }}>
+            Export
+          </button>
         </div>
 
-        {/* Markdown Content */}
-        <div className="flex-1 overflow-y-auto p-8">
-          <div className="max-w-4xl mx-auto bg-white shadow-lg rounded-xl min-h-[800px] p-10 border border-gray-200">
+        {/* Paper */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '52px 48px' }}>
+          <div style={{
+            maxWidth: '780px', margin: '0 auto',
+            background: T.creamPaper,
+            minHeight: '820px', padding: '72px 80px',
+            boxShadow: '0 2px 40px rgba(0,0,0,0.14), 0 1px 6px rgba(0,0,0,0.08)',
+          }}>
             {generatedReport ? (
-              <article className="prose prose-slate max-w-none prose-headings:font-bold prose-h1:text-3xl prose-h1:text-blue-900 prose-h2:text-xl prose-h2:text-blue-800 prose-h2:border-b prose-h2:pb-2 prose-h2:mt-8 prose-table:border-collapse prose-th:bg-gray-100 prose-th:p-2 prose-td:p-2 prose-td:border">
+              <div className="report-content">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {generatedReport}
                 </ReactMarkdown>
-              </article>
+              </div>
             ) : (
-              <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                <FileText className="w-16 h-16 mb-4 opacity-20" />
-                <p className="text-lg font-medium">No report generated yet</p>
-                <p className="text-sm">Fill out the form on the left and click "Generate"</p>
+              <div style={{ minHeight: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
+                {/* Ornament */}
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style={{ opacity: 0.12 }}>
+                  <rect x="6" y="8"  width="36" height="4" fill={T.ink}/>
+                  <rect x="6" y="17" width="28" height="3" fill={T.ink}/>
+                  <rect x="6" y="25" width="32" height="3" fill={T.ink}/>
+                  <rect x="6" y="33" width="22" height="3" fill={T.ink}/>
+                  <rect x="6" y="41" width="26" height="3" fill={T.ink}/>
+                </svg>
+                <p style={{ fontFamily: serif, fontSize: '24px', fontWeight: 300, color: 'rgba(28,26,22,0.28)', letterSpacing: '0.01em' }}>
+                  No report generated
+                </p>
+                <p style={{ fontFamily: sans, fontSize: '11px', color: 'rgba(28,26,22,0.22)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
+                  Complete the brief and generate a strategy
+                </p>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* ── Global styles ────────────────────────────────────────────────── */}
+      <style>{`
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body { background: ${T.bg}; }
+
+        @keyframes dot-pulse {
+          0%, 100% { opacity: 0.25; transform: scale(0.75); }
+          50%       { opacity: 1;    transform: scale(1);    }
+        }
+
+        input::placeholder, textarea::placeholder { color: ${T.textMuted}; }
+        input, textarea { caret-color: ${T.gold}; }
+        textarea { background: transparent !important; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar              { width: 4px; }
+        ::-webkit-scrollbar-track        { background: transparent; }
+        ::-webkit-scrollbar-thumb        { background: ${T.goldDim}; }
+        ::-webkit-scrollbar-thumb:hover  { background: rgba(201,168,76,0.45); }
+
+        /* ── Report typography ── */
+        .report-content {
+          font-family: ${sans};
+          color: ${T.inkLight};
+          line-height: 1.8;
+        }
+        .report-content h1 {
+          font-family: ${serif};
+          font-size: 38px;
+          font-weight: 400;
+          color: ${T.ink};
+          line-height: 1.15;
+          margin-bottom: 6px;
+          letter-spacing: -0.01em;
+        }
+        .report-content h2 {
+          font-family: ${serif};
+          font-size: 24px;
+          font-weight: 400;
+          color: ${T.ink};
+          margin-top: 48px;
+          margin-bottom: 14px;
+          padding-bottom: 10px;
+          border-bottom: 1px solid rgba(201,168,76,0.28);
+        }
+        .report-content h3 {
+          font-family: ${sans};
+          font-size: 10px;
+          font-weight: 600;
+          color: #7A5C1E;
+          text-transform: uppercase;
+          letter-spacing: 0.2em;
+          margin-top: 28px;
+          margin-bottom: 10px;
+        }
+        .report-content p {
+          font-size: 15px;
+          color: #2E2B24;
+          line-height: 1.85;
+          margin-bottom: 16px;
+        }
+        .report-content ul, .report-content ol {
+          margin: 4px 0 18px 22px;
+        }
+        .report-content li {
+          font-size: 15px;
+          color: #2E2B24;
+          line-height: 1.8;
+          margin-bottom: 5px;
+        }
+        .report-content strong { color: ${T.ink}; font-weight: 600; }
+        .report-content em     { font-style: italic; }
+        .report-content table  {
+          width: 100%; border-collapse: collapse;
+          margin: 28px 0; font-size: 13.5px;
+        }
+        .report-content th {
+          background: rgba(201,168,76,0.09);
+          color: #7A5C1E;
+          font-family: ${sans};
+          font-size: 9px;
+          text-transform: uppercase;
+          letter-spacing: 0.18em;
+          padding: 10px 14px;
+          text-align: left;
+          border-bottom: 1px solid rgba(201,168,76,0.28);
+          font-weight: 600;
+        }
+        .report-content td {
+          padding: 10px 14px;
+          border-bottom: 1px solid rgba(28,26,22,0.07);
+          color: #2E2B24;
+          font-family: ${sans};
+        }
+        .report-content code {
+          background: rgba(201,168,76,0.10);
+          padding: 2px 7px;
+          font-size: 13px;
+          color: #7A5C1E;
+          font-family: monospace;
+        }
+        .report-content pre {
+          background: rgba(28,26,22,0.05);
+          padding: 18px 20px;
+          overflow-x: auto;
+          margin: 20px 0;
+          border-left: 3px solid rgba(201,168,76,0.3);
+        }
+        .report-content pre code {
+          background: none;
+          padding: 0;
+          color: ${T.inkLight};
+        }
+        .report-content blockquote {
+          border-left: 3px solid #C9A84C;
+          padding: 14px 20px;
+          margin: 24px 0;
+          background: rgba(201,168,76,0.06);
+          font-family: ${serif};
+          font-size: 20px;
+          font-style: italic;
+          color: #5C4514;
+          line-height: 1.55;
+        }
+        .report-content hr {
+          border: none;
+          border-top: 1px solid rgba(201,168,76,0.2);
+          margin: 36px 0;
+        }
+        .report-content a {
+          color: #7A5C1E;
+          text-decoration: underline;
+          text-decoration-color: rgba(201,168,76,0.4);
+        }
+      `}</style>
     </div>
   );
 };
