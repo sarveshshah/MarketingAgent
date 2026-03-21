@@ -1,41 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import './App.css';
 
-// ─── Design Tokens ────────────────────────────────────────────────────────────
-const T = {
-  bg:        '#0C0C11',
-  bgPanel:   '#0F0F15',
-  bgSurface: 'rgba(255,255,255,0.04)',
-  gold:      '#C9A84C',
-  goldDim:   'rgba(201,168,76,0.25)',
-  goldFaint: 'rgba(201,168,76,0.08)',
-  cream:     '#F8F4EE',
-  creamPaper:'#FDFAF4',
-  ink:       '#1C1A16',
-  inkLight:  '#2E2B24',
-  textPrimary:   '#F0EBE1',
-  textSecondary: 'rgba(240,235,225,0.45)',
-  textMuted:     'rgba(240,235,225,0.22)',
-  border:    'rgba(255,255,255,0.07)',
-  borderGold:'rgba(201,168,76,0.18)',
-};
-
-const serif  = "'Cormorant Garamond', Georgia, serif";
-const sans   = "'DM Sans', system-ui, sans-serif";
-
-// ─── App ──────────────────────────────────────────────────────────────────────
 const App = () => {
-  const [activeTab, setActiveTab]         = useState('form');
-  const [isGenerating, setIsGenerating]   = useState(false);
+  const [theme, setTheme] = useState('light');
+  const [activeTab, setActiveTab] = useState('form');
+  const [isGenerating, setIsGenerating] = useState(false);
   const [generatedReport, setGeneratedReport] = useState('');
 
   const [formData, setFormData] = useState({
-    campaign_type:   'Product Launch',
+    campaign_type: 'Product Launch',
     target_industry: 'SaaS / Tech',
-    budget:          '$50,000',
-    timeline:        'Q3 2024',
-    goals:           'Acquire 1,000 new users; 20% conversion rate.',
+    budget: '$50,000',
+    timeline: 'Q3 2024',
+    goals: 'Acquire 1,000 new users; 20% conversion rate.',
   });
 
   const [chatInput, setChatInput] = useState('');
@@ -47,6 +26,46 @@ const App = () => {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isGenerating]);
+
+  // ─── Theme tokens ─────────────────────────────────────────────────────
+  const themes = {
+    light: {
+      bg: '#FFFFFF',
+      bgPanel: '#F9F7F4',
+      bgInput: '#F5F3F0',
+      bgChat: '#F0EEEB',
+      accent: '#0061FF',
+      accentLight: '#E8F0FF',
+      accentDark: '#0047CC',
+      text: '#1A1714',
+      textSecondary: '#6B6860',
+      textMuted: '#A89F94',
+      border: '#E8E3DB',
+      borderLight: '#F0EEEB',
+      success: '#00B368',
+      reportBg: '#FEFDFB',
+    },
+    dark: {
+      bg: '#0D0D0D',
+      bgPanel: '#1A1A1A',
+      bgInput: '#242422',
+      bgChat: '#1F1F1D',
+      accent: '#00D9FF',
+      accentLight: '#003D4D',
+      accentDark: '#00B8D4',
+      text: '#F5F3F0',
+      textSecondary: '#B8AFA3',
+      textMuted: '#7A7268',
+      border: '#2D2D2B',
+      borderLight: '#3A3A38',
+      success: '#00E066',
+      reportBg: '#1A1A1A',
+    },
+  };
+
+  const t = themes[theme];
+  const sans = "'Inter', system-ui, sans-serif";
+  const display = "'Outfit', system-ui, sans-serif";
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleInputChange = (e) => {
@@ -164,46 +183,103 @@ const App = () => {
     URL.revokeObjectURL(url);
   };
 
-  // ── Render ─────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <div style={{ display: 'flex', height: '100vh', background: T.bg, fontFamily: sans, overflow: 'hidden' }}>
-
+    <div style={{
+      display: 'flex',
+      height: '100vh',
+      background: t.bg,
+      fontFamily: sans,
+      overflow: 'hidden',
+      transition: 'background 0.3s ease',
+    }}>
       {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
       <div style={{
-        width: '380px', minWidth: '380px',
-        display: 'flex', flexDirection: 'column',
-        background: T.bgPanel,
-        borderRight: `1px solid ${T.border}`,
+        width: '420px',
+        minWidth: '420px',
+        display: 'flex',
+        flexDirection: 'column',
+        background: t.bgPanel,
+        borderRight: `1px solid ${t.border}`,
         position: 'relative',
       }}>
-        {/* Gold top line */}
-        <div style={{
-          position: 'absolute', top: 0, left: 0, right: 0, height: '1px',
-          background: `linear-gradient(90deg, transparent 0%, ${T.gold} 50%, transparent 100%)`,
-        }} />
-
         {/* Header */}
-        <div style={{ padding: '36px 32px 0' }}>
-          <div style={{ fontSize: '10px', letterSpacing: '0.32em', color: T.gold, textTransform: 'uppercase', fontWeight: 500, marginBottom: '10px' }}>
-            AI-Powered
+        <div style={{ padding: '28px 32px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+            <div>
+              <h1 style={{
+                fontFamily: display,
+                fontSize: '22px',
+                fontWeight: 700,
+                color: t.text,
+                margin: 0,
+                letterSpacing: '-0.01em',
+              }}>
+                Strategy
+              </h1>
+              <p style={{
+                fontSize: '11px',
+                color: t.textMuted,
+                margin: '4px 0 0 0',
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                fontWeight: 500,
+              }}>
+                AI Marketing Intelligence
+              </p>
+            </div>
+            <button
+              onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '8px',
+                background: t.bgInput,
+                border: `1px solid ${t.border}`,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: t.text,
+                fontSize: '16px',
+                transition: 'all 0.3s ease',
+              }}
+            >
+              {theme === 'light' ? '🌙' : '☀️'}
+            </button>
           </div>
-          <h1 style={{ fontFamily: serif, fontSize: '30px', fontWeight: 400, color: T.textPrimary, lineHeight: 1.15, margin: '0 0 28px', letterSpacing: '0.01em' }}>
-            Marketing<br /><em style={{ fontWeight: 300 }}>Intelligence</em>
-          </h1>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}` }}>
-            {[['form', 'Brief'], ['chat', 'Refine']].map(([key, label]) => (
-              <button key={key} onClick={() => setActiveTab(key)} style={{
-                flex: 1, padding: '8px 0 13px',
-                background: 'none', border: 'none', cursor: 'pointer',
-                fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 500,
-                color: activeTab === key ? T.gold : T.textSecondary,
-                borderBottom: `1px solid ${activeTab === key ? T.gold : 'transparent'}`,
-                marginBottom: '-1px',
-                transition: 'color 0.2s, border-color 0.2s',
-                fontFamily: sans,
-              }}>
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            borderBottom: `1px solid ${t.border}`,
+            marginTop: '20px',
+          }}>
+            {[
+              ['form', 'Brief'],
+              ['chat', 'Refine'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                style={{
+                  flex: 1,
+                  padding: '12px 0 14px',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  letterSpacing: '0.02em',
+                  color: activeTab === key ? t.accent : t.textMuted,
+                  borderBottom: `2px solid ${activeTab === key ? t.accent : 'transparent'}`,
+                  marginBottom: '-1px',
+                  transition: 'all 0.25s ease',
+                  fontFamily: display,
+                  textTransform: 'uppercase',
+                }}
+              >
                 {label}
               </button>
             ))}
@@ -211,111 +287,206 @@ const App = () => {
         </div>
 
         {/* Scrollable content */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
-
+        <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px', overflowX: 'hidden' }}>
           {/* FORM VIEW */}
           {activeTab === 'form' && (
             <div>
-              <p style={{ fontSize: '13px', color: T.textSecondary, lineHeight: 1.7, marginBottom: '32px' }}>
-                Define your campaign parameters. The agent synthesises them into a comprehensive strategy report.
+              <p style={{
+                fontSize: '13px',
+                color: t.textSecondary,
+                lineHeight: 1.7,
+                marginBottom: '28px',
+                margin: 0,
+              }}>
+                Define your campaign parameters. The agent synthesizes them into a comprehensive strategy.
               </p>
 
-              {[
-                { label: 'Campaign Type',   name: 'campaign_type',   type: 'text'     },
-                { label: 'Target Industry', name: 'target_industry', type: 'text'     },
-                { label: 'Budget',          name: 'budget',          type: 'text'     },
-                { label: 'Timeline',        name: 'timeline',        type: 'text'     },
-                { label: 'Goals & KPIs',    name: 'goals',           type: 'textarea' },
-              ].map(field => (
-                <div key={field.name} style={{ marginBottom: '28px' }}>
-                  <label style={{
-                    display: 'block', fontSize: '9px', letterSpacing: '0.28em',
-                    textTransform: 'uppercase', color: T.gold, fontWeight: 500, marginBottom: '10px',
-                  }}>
-                    {field.label}
-                  </label>
-                  {field.type === 'textarea' ? (
-                    <textarea name={field.name} value={formData[field.name]} onChange={handleInputChange} rows={3}
-                      style={{
-                        width: '100%', background: T.bgSurface, border: 'none',
-                        borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
-                        fontSize: '14px', padding: '6px 0', outline: 'none',
-                        fontFamily: sans, resize: 'none', lineHeight: 1.65, boxSizing: 'border-box',
-                      }}
-                    />
-                  ) : (
-                    <input type="text" name={field.name} value={formData[field.name]} onChange={handleInputChange}
-                      style={{
-                        width: '100%', background: 'transparent', border: 'none',
-                        borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
-                        fontSize: '14px', padding: '6px 0', outline: 'none',
-                        fontFamily: sans, boxSizing: 'border-box',
-                      }}
-                    />
-                  )}
-                </div>
-              ))}
+              <div style={{ marginTop: '24px' }}>
+                {[
+                  { label: 'Campaign Type', name: 'campaign_type', type: 'text' },
+                  { label: 'Target Industry', name: 'target_industry', type: 'text' },
+                  { label: 'Budget', name: 'budget', type: 'text' },
+                  { label: 'Timeline', name: 'timeline', type: 'text' },
+                  { label: 'Goals & KPIs', name: 'goals', type: 'textarea' },
+                ].map(field => (
+                  <div key={field.name} style={{ marginBottom: '24px' }}>
+                    <label style={{
+                      display: 'block',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      letterSpacing: '0.05em',
+                      textTransform: 'uppercase',
+                      color: t.textMuted,
+                      marginBottom: '8px',
+                    }}>
+                      {field.label}
+                    </label>
+                    {field.type === 'textarea' ? (
+                      <textarea
+                        name={field.name}
+                        value={formData[field.name]}
+                        onChange={handleInputChange}
+                        rows={3}
+                        style={{
+                          width: '100%',
+                          background: t.bgInput,
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '8px',
+                          color: t.text,
+                          fontSize: '13px',
+                          padding: '12px',
+                          outline: 'none',
+                          fontFamily: sans,
+                          resize: 'none',
+                          lineHeight: 1.6,
+                          boxSizing: 'border-box',
+                          transition: 'all 0.25s ease',
+                        }}
+                        onFocus={(e) => {
+                          e.target.style.borderColor = t.accent;
+                          e.target.style.boxShadow = `0 0 0 3px ${t.accentLight}`;
+                        }}
+                        onBlur={(e) => {
+                          e.target.style.borderColor = t.border;
+                          e.target.style.boxShadow = 'none';
+                        }}
+                      />
+                    ) : (
+                      <input
+                        type="text"
+                        name={field.name}
+                        value={formData[field.name]}
+                        onChange={handleInputChange}
+                        style={{
+                          width: '100%',
+                          background: t.bgInput,
+                          border: `1px solid ${t.border}`,
+                          borderRadius: '8px',
+                          color: t.text,
+                          fontSize: '13px',
+                          padding: '12px',
+                          outline: 'none',
+                          fontFamily: sans,
+                          boxSizing: 'border-box',
+                          transition: 'all 0.25s ease',
+                        }}
+                        onFocus={(e) => {
+                          e.target.style.borderColor = t.accent;
+                          e.target.style.boxShadow = `0 0 0 3px ${t.accentLight}`;
+                        }}
+                        onBlur={(e) => {
+                          e.target.style.borderColor = t.border;
+                          e.target.style.boxShadow = 'none';
+                        }}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
 
               {/* Divider */}
-              <div style={{ borderTop: `1px solid ${T.border}`, margin: '8px 0 24px' }} />
+              <div style={{ borderTop: `1px solid ${t.border}`, margin: '12px 0 28px' }} />
 
-              <button onClick={handleGenerate} disabled={isGenerating} style={{
-                width: '100%', padding: '14px 24px',
-                background: isGenerating ? T.goldDim : T.gold,
-                border: 'none',
-                color: isGenerating ? 'rgba(13,13,18,0.4)' : T.ink,
-                fontSize: '10px', letterSpacing: '0.28em', textTransform: 'uppercase', fontWeight: 600,
-                cursor: isGenerating ? 'not-allowed' : 'pointer',
-                fontFamily: sans, transition: 'background 0.2s, color 0.2s',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-              }}>
+              <button
+                onClick={handleGenerate}
+                disabled={isGenerating}
+                style={{
+                  width: '100%',
+                  padding: '14px 24px',
+                  background: isGenerating ? `${t.accent}40` : t.accent,
+                  border: 'none',
+                  borderRadius: '8px',
+                  color: isGenerating ? (theme === 'light' ? '#0047CC' : '#00B8D4') : t.bg,
+                  fontSize: '12px',
+                  letterSpacing: '0.05em',
+                  textTransform: 'uppercase',
+                  fontWeight: 700,
+                  cursor: isGenerating ? 'not-allowed' : 'pointer',
+                  fontFamily: display,
+                  transition: 'all 0.25s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '10px',
+                }}
+              >
                 {isGenerating ? (
                   <>
-                    <span style={{ display: 'inline-flex', gap: '3px', alignItems: 'center' }}>
+                    <span style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
                       {[0, 1, 2].map(i => (
-                        <span key={i} style={{
-                          width: '3px', height: '3px', borderRadius: '50%', background: T.gold,
-                          animation: `dot-pulse 1.2s ease-in-out ${i * 0.18}s infinite`,
-                          display: 'inline-block',
-                        }} />
+                        <span
+                          key={i}
+                          style={{
+                            width: '4px',
+                            height: '4px',
+                            borderRadius: '50%',
+                            background: theme === 'light' ? '#0047CC' : '#00B8D4',
+                            animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+                            display: 'inline-block',
+                          }}
+                        />
                       ))}
                     </span>
                     Generating
                   </>
-                ) : 'Generate Strategy'}
+                ) : (
+                  'Generate Strategy'
+                )}
               </button>
             </div>
           )}
 
           {/* CHAT VIEW */}
           {activeTab === 'chat' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {chatHistory.map((msg, idx) => (
-                <div key={idx} style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                  <div style={{
-                    maxWidth: '88%', padding: '10px 14px', fontSize: '13px', lineHeight: 1.65,
-                    background: msg.role === 'user' ? T.goldFaint : T.bgSurface,
-                    color: msg.role === 'user' ? '#E6D08A' : T.textSecondary,
-                    borderRight: msg.role === 'user' ? `2px solid ${T.gold}` : 'none',
-                    borderLeft: msg.role === 'system' ? `2px solid ${T.goldDim}` : 'none',
-                  }}>
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex',
+                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                  }}
+                >
+                  <div
+                    style={{
+                      maxWidth: '85%',
+                      padding: '12px 14px',
+                      fontSize: '13px',
+                      lineHeight: 1.6,
+                      background: msg.role === 'user' ? t.accent : t.bgChat,
+                      color: msg.role === 'user' ? t.bg : t.textSecondary,
+                      borderRadius: '8px',
+                      animation: `slideIn 0.3s ease-out`,
+                    }}
+                  >
                     {msg.content}
                   </div>
                 </div>
               ))}
               {isGenerating && (
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                  <div style={{
-                    padding: '12px 16px', background: T.bgSurface,
-                    borderLeft: `2px solid ${T.goldDim}`,
-                    display: 'flex', gap: '5px', alignItems: 'center',
-                  }}>
+                  <div
+                    style={{
+                      padding: '12px 14px',
+                      background: t.bgChat,
+                      borderRadius: '8px',
+                      display: 'flex',
+                      gap: '5px',
+                      alignItems: 'center',
+                    }}
+                  >
                     {[0, 1, 2].map(i => (
-                      <span key={i} style={{
-                        width: '4px', height: '4px', borderRadius: '50%', background: T.gold,
-                        display: 'inline-block',
-                        animation: `dot-pulse 1.2s ease-in-out ${i * 0.18}s infinite`,
-                      }} />
+                      <span
+                        key={i}
+                        style={{
+                          width: '5px',
+                          height: '5px',
+                          borderRadius: '50%',
+                          background: t.accent,
+                          display: 'inline-block',
+                          animation: `pulse 1.2s ease-in-out ${i * 0.2}s infinite`,
+                        }}
+                      />
                     ))}
                   </div>
                 </div>
@@ -327,28 +498,56 @@ const App = () => {
 
         {/* Chat input */}
         {activeTab === 'chat' && (
-          <div style={{ padding: '16px 32px 28px', borderTop: `1px solid ${T.border}` }}>
-            <form onSubmit={handleChatSubmit} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+          <div style={{
+            padding: '16px 32px 28px',
+            borderTop: `1px solid ${t.border}`,
+          }}>
+            <form
+              onSubmit={handleChatSubmit}
+              style={{
+                display: 'flex',
+                gap: '12px',
+                alignItems: 'flex-end',
+              }}
+            >
               <input
-                type="text" value={chatInput}
+                type="text"
+                value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder="Refine the strategy…"
                 style={{
-                  flex: 1, background: 'transparent', border: 'none',
-                  borderBottom: `1px solid ${T.goldDim}`, color: T.textPrimary,
-                  fontSize: '13px', padding: '6px 0', outline: 'none', fontFamily: sans,
+                  flex: 1,
+                  background: t.bgInput,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '8px',
+                  color: t.text,
+                  fontSize: '13px',
+                  padding: '10px 12px',
+                  outline: 'none',
+                  fontFamily: sans,
+                  transition: 'all 0.25s ease',
                 }}
               />
-              <button type="submit" disabled={isGenerating || !chatInput.trim()} style={{
-                width: '34px', height: '34px', flexShrink: 0,
-                background: chatInput.trim() ? T.gold : T.goldDim,
-                border: 'none', cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                transition: 'background 0.2s',
-              }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                  <path d="M22 2L11 13" stroke={T.ink} strokeWidth="2.2" strokeLinecap="round"/>
-                  <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke={T.ink} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
+              <button
+                type="submit"
+                disabled={isGenerating || !chatInput.trim()}
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  flexShrink: 0,
+                  background: chatInput.trim() ? t.accent : t.bgInput,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: '8px',
+                  cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  transition: 'all 0.25s ease',
+                  color: chatInput.trim() ? t.bg : t.textMuted,
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                  <path d="M3 12h16M12 3l9 9-9 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
             </form>
@@ -357,212 +556,337 @@ const App = () => {
       </div>
 
       {/* ── RIGHT PANEL ──────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#EEEAE0', overflow: 'hidden' }}>
-
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          background: t.bg,
+          overflow: 'hidden',
+        }}
+      >
         {/* Toolbar */}
-        <div style={{
-          height: '58px', background: T.bgPanel,
-          borderBottom: `1px solid ${T.border}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: '0 36px', flexShrink: 0,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{
-              width: '6px', height: '6px', borderRadius: '50%',
-              background: generatedReport ? T.gold : T.textMuted,
-              boxShadow: generatedReport ? `0 0 8px ${T.gold}` : 'none',
-              transition: 'all 0.4s ease',
-            }} />
-            <span style={{
-              fontSize: '10px', letterSpacing: '0.22em', textTransform: 'uppercase', fontWeight: 500,
-              color: generatedReport ? 'rgba(240,235,225,0.6)' : T.textMuted,
-              transition: 'color 0.3s',
-            }}>
-              {generatedReport ? 'Strategy Report' : 'Awaiting Brief'}
+        <div
+          style={{
+            height: '64px',
+            background: t.bgPanel,
+            borderBottom: `1px solid ${t.border}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 40px',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: generatedReport ? t.success : t.textMuted,
+                boxShadow: generatedReport ? `0 0 10px ${t.success}60` : 'none',
+                transition: 'all 0.4s ease',
+              }}
+            />
+            <span
+              style={{
+                fontSize: '11px',
+                letterSpacing: '0.05em',
+                textTransform: 'uppercase',
+                fontWeight: 600,
+                color: generatedReport ? t.text : t.textMuted,
+                transition: 'color 0.3s',
+              }}
+            >
+              {generatedReport ? 'Strategy Report Ready' : 'Awaiting Brief'}
             </span>
           </div>
-          <button onClick={handleExport} disabled={!generatedReport} style={{
-            background: 'none', border: `1px solid ${generatedReport ? T.goldDim : 'rgba(255,255,255,0.06)'}`,
-            color: generatedReport ? 'rgba(201,168,76,0.7)' : T.textMuted,
-            fontSize: '9px', letterSpacing: '0.22em', textTransform: 'uppercase',
-            padding: '6px 18px', cursor: generatedReport ? 'pointer' : 'not-allowed',
-            fontFamily: sans, fontWeight: 500,
-            transition: 'all 0.2s',
-          }}>
+          <button
+            onClick={handleExport}
+            disabled={!generatedReport}
+            style={{
+              background: generatedReport ? `${t.accent}15` : 'transparent',
+              border: `1px solid ${generatedReport ? t.accent : t.border}`,
+              borderRadius: '6px',
+              color: generatedReport ? t.accent : t.textMuted,
+              fontSize: '11px',
+              letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+              fontWeight: 600,
+              padding: '8px 16px',
+              cursor: generatedReport ? 'pointer' : 'not-allowed',
+              fontFamily: display,
+              transition: 'all 0.25s ease',
+            }}
+          >
             Export
           </button>
         </div>
 
-        {/* Paper */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '52px 48px' }}>
-          <div style={{
-            maxWidth: '780px', margin: '0 auto',
-            background: T.creamPaper,
-            minHeight: '820px', padding: '72px 80px',
-            boxShadow: '0 2px 40px rgba(0,0,0,0.14), 0 1px 6px rgba(0,0,0,0.08)',
-          }}>
-            {generatedReport ? (
-              <div className="report-content">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {generatedReport}
-                </ReactMarkdown>
+        {/* Report area */}
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '48px 40px',
+          background: t.bg,
+        }}>
+          {generatedReport ? (
+            <div
+              className={theme === 'light' ? 'report-content-light' : 'report-content-dark'}
+              style={{
+                maxWidth: '900px',
+                margin: '0 auto',
+              }}
+            >
+              <ReactMarkdown remarkPlugins={[remarkGfm]} className="markdown-content">
+                {generatedReport}
+              </ReactMarkdown>
+            </div>
+          ) : (
+            <div
+              style={{
+                maxWidth: '900px',
+                margin: '0 auto',
+                minHeight: '600px',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '20px',
+                textAlign: 'center',
+              }}
+            >
+              <div
+                style={{
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '12px',
+                  background: `${t.accent}15`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '32px',
+                }}
+              >
+                📊
               </div>
-            ) : (
-              <div style={{ minHeight: '600px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '16px' }}>
-                {/* Ornament */}
-                <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style={{ opacity: 0.12 }}>
-                  <rect x="6" y="8"  width="36" height="4" fill={T.ink}/>
-                  <rect x="6" y="17" width="28" height="3" fill={T.ink}/>
-                  <rect x="6" y="25" width="32" height="3" fill={T.ink}/>
-                  <rect x="6" y="33" width="22" height="3" fill={T.ink}/>
-                  <rect x="6" y="41" width="26" height="3" fill={T.ink}/>
-                </svg>
-                <p style={{ fontFamily: serif, fontSize: '24px', fontWeight: 300, color: 'rgba(28,26,22,0.28)', letterSpacing: '0.01em' }}>
-                  No report generated
-                </p>
-                <p style={{ fontFamily: sans, fontSize: '11px', color: 'rgba(28,26,22,0.22)', letterSpacing: '0.14em', textTransform: 'uppercase' }}>
-                  Complete the brief and generate a strategy
-                </p>
-              </div>
-            )}
-          </div>
+              <h2
+                style={{
+                  fontFamily: display,
+                  fontSize: '24px',
+                  fontWeight: 700,
+                  color: t.text,
+                  margin: 0,
+                  letterSpacing: '-0.01em',
+                }}
+              >
+                No Report Generated
+              </h2>
+              <p
+                style={{
+                  fontSize: '13px',
+                  color: t.textSecondary,
+                  margin: 0,
+                  maxWidth: '400px',
+                  lineHeight: 1.6,
+                }}
+              >
+                Complete the brief on the left and generate a strategy to see your marketing intelligence report here.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       {/* ── Global styles ────────────────────────────────────────────────── */}
       <style>{`
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        body { background: ${T.bg}; }
-
-        @keyframes dot-pulse {
-          0%, 100% { opacity: 0.25; transform: scale(0.75); }
-          50%       { opacity: 1;    transform: scale(1);    }
+        *, *::before, *::after {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
         }
 
-        input::placeholder, textarea::placeholder { color: ${T.textMuted}; }
-        input, textarea { caret-color: ${T.gold}; }
-        textarea { background: transparent !important; }
+        html {
+          scroll-behavior: smooth;
+        }
+
+        body {
+          background: ${t.bg};
+          color: ${t.text};
+          transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 0.4;
+            transform: scale(0.8);
+          }
+          50% {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        input::placeholder,
+        textarea::placeholder {
+          color: ${t.textMuted};
+        }
+
+        input,
+        textarea {
+          caret-color: ${t.accent};
+        }
 
         /* Scrollbar */
-        ::-webkit-scrollbar              { width: 4px; }
-        ::-webkit-scrollbar-track        { background: transparent; }
-        ::-webkit-scrollbar-thumb        { background: ${T.goldDim}; }
-        ::-webkit-scrollbar-thumb:hover  { background: rgba(201,168,76,0.45); }
+        ::-webkit-scrollbar {
+          width: 6px;
+        }
 
-        /* ── Report typography ── */
-        .report-content {
+        ::-webkit-scrollbar-track {
+          background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+          background: ${t.border};
+          border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+          background: ${t.textMuted};
+        }
+
+        /* Markdown content */
+        .markdown-content {
           font-family: ${sans};
-          color: ${T.inkLight};
+          color: ${t.text};
           line-height: 1.8;
         }
-        .report-content h1 {
-          font-family: ${serif};
-          font-size: 38px;
-          font-weight: 400;
-          color: ${T.ink};
-          line-height: 1.15;
-          margin-bottom: 6px;
+
+        .markdown-content h1 {
+          font-family: ${display};
+          font-size: 32px;
+          font-weight: 800;
+          color: ${t.text};
+          line-height: 1.2;
+          margin: 0 0 12px 0;
           letter-spacing: -0.01em;
         }
-        .report-content h2 {
-          font-family: ${serif};
-          font-size: 24px;
-          font-weight: 400;
-          color: ${T.ink};
-          margin-top: 48px;
-          margin-bottom: 14px;
-          padding-bottom: 10px;
-          border-bottom: 1px solid rgba(201,168,76,0.28);
+
+        .markdown-content h2 {
+          font-family: ${display};
+          font-size: 22px;
+          font-weight: 700;
+          color: ${t.text};
+          margin: 36px 0 16px 0;
+          padding-bottom: 12px;
+          border-bottom: 2px solid ${t.accent}40;
+          letter-spacing: -0.005em;
         }
-        .report-content h3 {
-          font-family: ${sans};
-          font-size: 10px;
-          font-weight: 600;
-          color: #7A5C1E;
+
+        .markdown-content h3 {
+          font-family: ${display};
+          font-size: 14px;
+          font-weight: 700;
+          color: ${t.accent};
           text-transform: uppercase;
-          letter-spacing: 0.2em;
-          margin-top: 28px;
-          margin-bottom: 10px;
+          letter-spacing: 0.05em;
+          margin: 24px 0 12px 0;
         }
-        .report-content p {
+
+        .markdown-content p {
           font-size: 15px;
-          color: #2E2B24;
-          line-height: 1.85;
+          color: ${t.textSecondary};
+          line-height: 1.8;
           margin-bottom: 16px;
         }
-        .report-content ul, .report-content ol {
-          margin: 4px 0 18px 22px;
+
+        .markdown-content ul,
+        .markdown-content ol {
+          margin: 12px 0 18px 24px;
         }
-        .report-content li {
+
+        .markdown-content li {
           font-size: 15px;
-          color: #2E2B24;
+          color: ${t.textSecondary};
           line-height: 1.8;
-          margin-bottom: 5px;
+          margin-bottom: 8px;
         }
-        .report-content strong { color: ${T.ink}; font-weight: 600; }
-        .report-content em     { font-style: italic; }
-        .report-content table  {
-          width: 100%; border-collapse: collapse;
-          margin: 28px 0; font-size: 13.5px;
+
+        .markdown-content strong {
+          color: ${t.text};
+          font-weight: 700;
         }
-        .report-content th {
-          background: rgba(201,168,76,0.09);
-          color: #7A5C1E;
-          font-family: ${sans};
-          font-size: 9px;
-          text-transform: uppercase;
-          letter-spacing: 0.18em;
-          padding: 10px 14px;
-          text-align: left;
-          border-bottom: 1px solid rgba(201,168,76,0.28);
-          font-weight: 600;
-        }
-        .report-content td {
-          padding: 10px 14px;
-          border-bottom: 1px solid rgba(28,26,22,0.07);
-          color: #2E2B24;
-          font-family: ${sans};
-        }
-        .report-content code {
-          background: rgba(201,168,76,0.10);
-          padding: 2px 7px;
-          font-size: 13px;
-          color: #7A5C1E;
-          font-family: monospace;
-        }
-        .report-content pre {
-          background: rgba(28,26,22,0.05);
-          padding: 18px 20px;
-          overflow-x: auto;
-          margin: 20px 0;
-          border-left: 3px solid rgba(201,168,76,0.3);
-        }
-        .report-content pre code {
-          background: none;
-          padding: 0;
-          color: ${T.inkLight};
-        }
-        .report-content blockquote {
-          border-left: 3px solid #C9A84C;
-          padding: 14px 20px;
-          margin: 24px 0;
-          background: rgba(201,168,76,0.06);
-          font-family: ${serif};
-          font-size: 20px;
+
+        .markdown-content em {
+          color: ${t.accent};
           font-style: italic;
-          color: #5C4514;
-          line-height: 1.55;
         }
-        .report-content hr {
-          border: none;
-          border-top: 1px solid rgba(201,168,76,0.2);
-          margin: 36px 0;
+
+        .markdown-content code {
+          background: ${t.bgInput};
+          color: ${t.accent};
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-family: 'Fira Code', monospace;
+          font-size: 13px;
         }
-        .report-content a {
-          color: #7A5C1E;
-          text-decoration: underline;
-          text-decoration-color: rgba(201,168,76,0.4);
+
+        .markdown-content pre {
+          background: ${t.bgInput};
+          padding: 16px;
+          border-radius: 8px;
+          border: 1px solid ${t.border};
+          overflow-x: auto;
+          margin: 16px 0;
+        }
+
+        .markdown-content pre code {
+          background: transparent;
+          padding: 0;
+          color: ${t.textSecondary};
+        }
+
+        .markdown-content blockquote {
+          border-left: 3px solid ${t.accent};
+          padding-left: 16px;
+          margin: 16px 0;
+          color: ${t.textSecondary};
+          font-style: italic;
+        }
+
+        .markdown-content table {
+          border-collapse: collapse;
+          width: 100%;
+          margin: 16px 0;
+        }
+
+        .markdown-content th,
+        .markdown-content td {
+          border: 1px solid ${t.border};
+          padding: 12px;
+          text-align: left;
+        }
+
+        .markdown-content th {
+          background: ${t.bgInput};
+          font-weight: 700;
+          color: ${t.text};
+        }
+
+        .markdown-content td {
+          color: ${t.textSecondary};
         }
       `}</style>
     </div>
